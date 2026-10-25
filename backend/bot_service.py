@@ -1,23 +1,36 @@
-"""Core bot background service coordinating market data, strategy, risk, execution, and automation."""
+"""Core bot background service coordinating Option Buying, market data, Supertrend+EMA strategy, and execution."""
 
 import asyncio
 from datetime import datetime, timezone
 import logging
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+from sqlalchemy import delete
 
 from backend.config import Settings, get_settings
 from backend.database import get_db_session, init_db
 from backend.delta_client import DeltaClient
 from backend.execution_manager import ExecutionManager
+from backend.indicators import (
+    calculate_atr,
+    calculate_bollinger_bands,
+    calculate_ema,
+    calculate_rsi,
+    calculate_supertrend,
+)
 from backend.market_data import MarketDataManager
 from backend.models import (
     ApiScannerResult,
+    AtmOptionInfo,
     AutomationMode,
     BotState,
     BotStatusResponse,
     CredentialsStatus,
     EventLog,
+    OptionConfigPayload,
+    OrderRecord,
+    PositionRecord,
+    SessionResetResponse,
     SignalAction,
     SignalRecord,
     SignalResult,
@@ -33,7 +46,7 @@ logger = logging.getLogger("edgepilot.bot_service")
 
 
 class BotService:
-    """Singleton service driving the end-to-end trading loop."""
+    """Singleton service driving the end-to-end Option Buying trading loop."""
 
     def __init__(self, settings: Optional[Settings] = None):
         self.settings = settings or get_settings()
@@ -49,6 +62,7 @@ class BotService:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self.latest_signal: Optional[SignalResult] = None
+        self.current_atm_option: Optional[AtmOptionInfo] = None
         self.current_position_size: float = 0.0
         self.unrealized_pnl: float = 0.0
         self.latest_price: float = 0.0
@@ -73,9 +87,62 @@ class BotService:
             environment=self.settings.ENVIRONMENT.value
         )
 
+    def get_chart_data(self) -> List[Dict[str, Any]]:
+        """Return formatted candle chart history with Supertrend and EMA overlays."""
+        if not self.market_data.candles_5m.candles:
+            return []
+        _, highs, lows, closes, volumes = self.market_data.candles_5m.to_arrays()
+        ema_val = calculate_ema(closes, self.settings.EMA_PERIOD)
+        st_val, st_dir, _, _ = calculate_supertrend(
+            highs, lows, closes,
+            period=self.settings.SUPERTREND_PERIOD,
+            multiplier=self.settings.SUPERTREND_MULT
+        )
+        rsi_val = calculate_rsi(closes, self.settings.RSI_PERIOD)
+
+        candles = self.market_data.candles_5m.candles[-60:]
+        offset = len(closes) - len(candles)
+        data = []
+
+        import numpy as np
+        for idx, c in enumerate(candles):
+            global_idx = offset + idx
+            dt = datetime.fromtimestamp(c.timestamp, tz=timezone.utc)
+            val_ema = float(ema_val[global_idx]) if not np.isnan(ema_val[global_idx]) else c.close
+            val_st = float(st_val[global_idx]) if not np.isnan(st_val[global_idx]) else c.close
+            val_st_d = int(st_dir[global_idx])
+            val_rsi = float(rsi_val[global_idx]) if not np.isnan(rsi_val[global_idx]) else 50.0
+
+            data.append({
+                "time": dt.strftime("%H:%M"),
+                "timestamp": c.timestamp,
+                "open": round(c.open, 2),
+                "high": round(c.high, 2),
+                "low": round(c.low, 2),
+                "close": round(c.close, 2),
+                "volume": round(c.volume, 2),
+                "ema": round(val_ema, 2),
+                "supertrend": round(val_st, 2),
+                "supertrend_direction": val_st_d,
+                "rsi": round(val_rsi, 1)
+            })
+        return data
+
     def set_automation_mode(self, enabled: bool) -> None:
         self.automation_mode = AutomationMode.AUTO_PILOT if enabled else AutomationMode.MANUAL
         logger.info(f"Automation mode set to: {self.automation_mode.value}")
+
+    async def switch_underlying_asset(self, asset: str) -> bool:
+        """Switch underlying asset between BTC, ETH, and XAUT."""
+        asset = asset.upper().strip()
+        symbol_map = {
+            "BTC": "BTCUSD",
+            "ETH": "ETHUSD",
+            "XAUT": "XAUTUSD"
+        }
+        symbol = symbol_map.get(asset, f"{asset}USD")
+        self.settings.UNDERLYING_ASSET = asset
+        return await self.switch_symbol(symbol)
 
     async def switch_symbol(self, symbol: str) -> bool:
         """Switch active market symbol in runtime."""
@@ -95,12 +162,78 @@ class BotService:
             logger.error(f"Failed to switch symbol to {symbol}: {exc}")
             return False
 
+    async def update_option_config(self, payload: OptionConfigPayload) -> None:
+        """Update runtime option buying settings."""
+        self.settings.TIMEFRAME = payload.timeframe
+        self.settings.CONTRACTS_COUNT = max(1, payload.contracts)
+        self.settings.SUPERTREND_PERIOD = max(2, payload.supertrend_period)
+        self.settings.SUPERTREND_MULT = max(0.5, payload.supertrend_multiplier)
+        self.settings.EMA_PERIOD = max(2, payload.ema_period)
+        self.settings.OPTION_ATR_PERIOD = max(2, payload.option_atr_period)
+        self.settings.SL_ATR_MULT = max(0.5, payload.sl_atr_multiplier)
+        self.settings.TP_ATR_MULT = max(0.5, payload.tp_atr_multiplier)
+
+        new_asset = payload.underlying_asset.upper().strip()
+        if new_asset != self.settings.UNDERLYING_ASSET:
+            await self.switch_underlying_asset(new_asset)
+        else:
+            await self.sync_market_data()
+
+    async def clear_session(self) -> SessionResetResponse:
+        """Stop and close tracked option positions, cancel orders, and clear session data for a fresh start."""
+        logger.warning("Safety session reset: Closing positions, cancelling orders, and purging session data...")
+        closed_count = 0
+        cancelled_count = 0
+
+        # 1. Close current position
+        if abs(self.current_position_size) > 0:
+            target_prod = self.current_atm_option.product_id if self.current_atm_option else self.settings.PRODUCT_ID
+            target_sym = self.current_atm_option.symbol if self.current_atm_option else self.settings.SYMBOL
+            success = await self.execution.close_position_market(target_prod, self.current_position_size, target_sym)
+            if success:
+                closed_count = 1
+
+        # 2. Cancel all pending orders
+        prod_ids = [self.settings.PRODUCT_ID]
+        if self.current_atm_option:
+            prod_ids.append(self.current_atm_option.product_id)
+        cancelled_count = await self.execution.emergency_cancel_all(prod_ids)
+
+        # 3. Reset in-memory tracking
+        self.current_position_size = 0.0
+        self.unrealized_pnl = 0.0
+        self.latest_signal = None
+        self.active_orders_count = 0
+        self.risk_manager.reset_daily_loss()
+
+        # 4. Clear database session records
+        try:
+            async with get_db_session() as session:
+                await session.execute(delete(OrderRecord))
+                await session.execute(delete(PositionRecord))
+                await session.execute(delete(SignalRecord))
+                session.add(EventLog(
+                    event_type="SESSION_RESET",
+                    component="BotService",
+                    message="Session reset completed: closed tracked option positions and cleared session history.",
+                    details=f"positions_closed={closed_count}, orders_cancelled={cancelled_count}"
+                ))
+        except Exception as db_err:
+            logger.error(f"Error purging database session tables: {db_err}")
+
+        self.state_machine.transition(BotState.READY, "Clean session reset completed")
+        return SessionResetResponse(
+            success=True,
+            message="Tracked positions closed, pending orders cancelled, and session data cleared for a fresh start.",
+            positions_closed=closed_count,
+            orders_cancelled=cancelled_count
+        )
+
     async def scan_connectivity(self) -> ApiScannerResult:
         """Scan API connection health, latency, and auth validity."""
         t0 = time.time()
         rest_ok = False
         latency = 999.0
-        drift = 0.0
         products_count = 0
         auth_ok = False
         auth_msg = "Credentials Not Configured"
@@ -133,7 +266,7 @@ class BotService:
             credentials_valid=auth_ok,
             auth_status=auth_msg,
             product_count=products_count,
-            clock_drift_seconds=drift,
+            clock_drift_seconds=0.0,
             status_summary=status_str
         )
 
@@ -147,7 +280,7 @@ class BotService:
             try:
                 ticker = await self.client.get_ticker(sym)
                 if ticker:
-                    price = float(ticker.get("close") or ticker.get("mark_price") or 0.0)
+                    price = float(ticker.get("close") or ticker.get("spot_price") or ticker.get("mark_price") or 0.0)
                     open_24h = float(ticker.get("open") or price)
                     if open_24h > 0:
                         change_24h = round(((price - open_24h) / open_24h) * 100.0, 2)
@@ -168,14 +301,16 @@ class BotService:
 
     async def flatten_position(self, reason: str = "Operator flatten command") -> bool:
         """Emergency flatten current position."""
+        target_prod = self.current_atm_option.product_id if self.current_atm_option else self.settings.PRODUCT_ID
+        target_sym = self.current_atm_option.symbol if self.current_atm_option else self.settings.SYMBOL
         return await self.execution.close_position_market(
-            product_id=self.settings.PRODUCT_ID,
+            product_id=target_prod,
             current_size=self.current_position_size,
-            symbol=self.settings.SYMBOL
+            symbol=target_sym
         )
 
     async def initialize(self) -> bool:
-        logger.info("Initializing EdgePilot Trading Bot...")
+        logger.info("Initializing EdgePilot Option Buying Bot...")
         self.state_machine.transition(BotState.INITIALIZING, "Running startup gates")
         await init_db()
 
@@ -197,22 +332,70 @@ class BotService:
         return True
 
     async def sync_market_data(self) -> None:
+        """Synchronize candles, calculate indicators, and select ATM Option with ATR brackets."""
         try:
-            raw_5m = await self.client.get_candles(self.settings.SYMBOL, resolution="5m")
+            # 1. Update live ticker / spot price
+            ticker = await self.client.get_ticker(self.settings.SYMBOL)
+            if ticker:
+                self.latest_price = float(ticker.get("spot_price") or ticker.get("close") or ticker.get("mark_price") or 0.0)
+
+            # 2. Fetch and ingest candles (with gap filling)
+            raw_5m = await self.client.get_candles(self.settings.SYMBOL, resolution=self.settings.TIMEFRAME)
             raw_15m = await self.client.get_candles(self.settings.SYMBOL, resolution="15m")
             if raw_5m or raw_15m:
-                self.market_data.ingest_raw_candles(raw_5m, raw_15m)
-                if self.market_data.candles_5m.candles:
+                self.market_data.ingest_raw_candles(raw_5m, raw_15m, latest_price=self.latest_price)
+                if self.market_data.candles_5m.candles and self.latest_price == 0.0:
                     self.latest_price = self.market_data.candles_5m.candles[-1].close
+
+            # 3. Evaluate Strategy
+            signal = self.strategy.evaluate(
+                self.market_data.candles_5m,
+                self.market_data.candles_15m
+            )
+            self.latest_signal = signal
+
+            # 4. Discover ATM Option & Calculate Option-based ATR Brackets
+            if self.latest_price > 0:
+                direction = "BUY_CALL"
+                if signal.action == SignalAction.BUY_PUT:
+                    direction = "BUY_PUT"
+                elif signal.action == SignalAction.BUY_CALL:
+                    direction = "BUY_CALL"
+
+                atm_prod = await self.client.find_atm_option(
+                    self.settings.UNDERLYING_ASSET,
+                    direction,
+                    self.latest_price
+                )
+                if atm_prod:
+                    atm_sym = atm_prod.get("symbol", "")
+                    quote = await self.client.get_option_quote(atm_sym)
+                    q_price = float(quote.get("best_ask") or quote.get("close") or quote.get("mark_price") or 50.0)
+                    opt_atr = signal.indicators.option_atr if signal.indicators.option_atr > 0 else 10.0
+                    sl_p = max(0.1, round(q_price - (self.settings.SL_ATR_MULT * opt_atr), 2))
+                    tp_p = round(q_price + (self.settings.TP_ATR_MULT * opt_atr), 2)
+                    self.current_atm_option = AtmOptionInfo(
+                        product_id=int(atm_prod.get("id", 0)),
+                        symbol=atm_sym,
+                        option_type="CALL" if "call" in atm_prod.get("contract_type", "").lower() else "PUT",
+                        strike_price=float(atm_prod.get("strike_price", 0)),
+                        settlement_time=str(atm_prod.get("settlement_time", "")),
+                        quote_price=q_price,
+                        option_atr=opt_atr,
+                        stop_loss_price=sl_p,
+                        take_profit_price=tp_p,
+                        stop_loss_label=f"SL: ${sl_p} ({self.settings.SL_ATR_MULT}x ATR)",
+                        take_profit_label=f"TP: ${tp_p} ({self.settings.TP_ATR_MULT}x ATR)"
+                    )
         except Exception as exc:
-            logger.error(f"Error syncing candles: {exc}")
+            logger.error(f"Error syncing market data and ATM option: {exc}")
 
     async def start(self) -> None:
         if self._running:
             return
         self._running = True
         self._task = asyncio.create_task(self._main_loop())
-        logger.info("Bot main loop started.")
+        logger.info("Option Buying bot main loop started.")
 
     async def stop(self) -> None:
         self._running = False
@@ -222,7 +405,7 @@ class BotService:
                 await self._task
             except asyncio.CancelledError:
                 pass
-        logger.info("Bot main loop stopped.")
+        logger.info("Option Buying bot main loop stopped.")
 
     async def _main_loop(self) -> None:
         reconcile_counter = 0
@@ -231,49 +414,47 @@ class BotService:
             try:
                 await self.sync_market_data()
 
-                signal = self.strategy.evaluate(
-                    self.market_data.candles_5m,
-                    self.market_data.candles_15m
-                )
-                self.latest_signal = signal
-
-                if signal.action != SignalAction.NO_TRADE:
+                if self.latest_signal and self.latest_signal.action != SignalAction.NO_TRADE:
                     async with get_db_session() as session:
                         session.add(SignalRecord(
-                            symbol=signal.symbol,
-                            action=signal.action.value,
-                            price=signal.price,
-                            indicators=signal.indicators.model_dump_json(),
-                            reason=signal.reason
+                            symbol=self.latest_signal.symbol,
+                            action=self.latest_signal.action.value,
+                            price=self.latest_signal.price,
+                            indicators=self.latest_signal.indicators.model_dump_json(),
+                            reason=self.latest_signal.reason
                         ))
 
-                # If RUNNING and AUTO_PILOT is enabled, execute automatically
+                # If RUNNING and AUTO_PILOT is enabled, execute confirmed option order
                 if self.state_machine.current_state == BotState.RUNNING and self.automation_mode == AutomationMode.AUTO_PILOT:
-                    if signal.action in (SignalAction.LONG, SignalAction.SHORT):
+                    if self.latest_signal and self.latest_signal.action in (SignalAction.BUY_CALL, SignalAction.BUY_PUT, SignalAction.LONG, SignalAction.SHORT):
                         risk_eval = self.risk_manager.evaluate_intent(
-                            signal=signal,
+                            signal=self.latest_signal,
                             current_position_size=self.current_position_size
                         )
                         if risk_eval.approved:
-                            logger.info(f"Auto-Pilot: Submitting approved {signal.action.value} order...")
+                            target_prod_id = self.current_atm_option.product_id if self.current_atm_option else self.settings.PRODUCT_ID
+                            target_sym = self.current_atm_option.symbol if self.current_atm_option else self.settings.SYMBOL
+                            logger.info(f"Auto-Pilot: Submitting approved {self.latest_signal.action.value} order on {target_sym}...")
                             success, msg, client_id = await self.execution.execute_trade_intent(
-                                action=signal.action,
+                                action=self.latest_signal.action,
                                 risk=risk_eval,
-                                product_id=self.settings.PRODUCT_ID,
-                                symbol=self.settings.SYMBOL
+                                product_id=target_prod_id,
+                                symbol=target_sym
                             )
                             if success:
                                 _, self.current_position_size, self.unrealized_pnl = await self.reconciler.reconcile(
-                                    self.settings.PRODUCT_ID,
-                                    self.settings.SYMBOL
+                                    target_prod_id,
+                                    target_sym
                                 )
 
                 reconcile_counter += 1
                 if reconcile_counter >= 6:
                     reconcile_counter = 0
+                    target_prod_id = self.current_atm_option.product_id if self.current_atm_option else self.settings.PRODUCT_ID
+                    target_sym = self.current_atm_option.symbol if self.current_atm_option else self.settings.SYMBOL
                     _, self.current_position_size, self.unrealized_pnl = await self.reconciler.reconcile(
-                        self.settings.PRODUCT_ID,
-                        self.settings.SYMBOL
+                        target_prod_id,
+                        target_sym
                     )
 
             except Exception as exc:
@@ -284,11 +465,24 @@ class BotService:
     def get_status(self) -> BotStatusResponse:
         daily_loss_pct = (self.risk_manager.daily_realized_loss / self.settings.TEST_EQUITY_USD) if self.settings.TEST_EQUITY_USD > 0 else 0.0
 
+        current_opt_config = OptionConfigPayload(
+            underlying_asset=self.settings.UNDERLYING_ASSET,
+            timeframe=self.settings.TIMEFRAME,
+            contracts=self.settings.CONTRACTS_COUNT,
+            supertrend_period=self.settings.SUPERTREND_PERIOD,
+            supertrend_multiplier=self.settings.SUPERTREND_MULT,
+            ema_period=self.settings.EMA_PERIOD,
+            option_atr_period=self.settings.OPTION_ATR_PERIOD,
+            sl_atr_multiplier=self.settings.SL_ATR_MULT,
+            tp_atr_multiplier=self.settings.TP_ATR_MULT
+        )
+
         return BotStatusResponse(
             state=self.state_machine.current_state,
             environment=self.settings.ENVIRONMENT.value,
             symbol=self.settings.SYMBOL,
             product_id=self.settings.PRODUCT_ID,
+            underlying_asset=self.settings.UNDERLYING_ASSET,
             automation_mode=self.automation_mode,
             test_equity_usd=self.settings.TEST_EQUITY_USD,
             current_position_size=self.current_position_size,
@@ -299,6 +493,8 @@ class BotService:
             latest_price=self.latest_price if self.latest_price > 0 else None,
             latest_signal=self.latest_signal,
             indicators=self.latest_signal.indicators if self.latest_signal else None,
+            atm_option=self.current_atm_option,
+            option_config=current_opt_config,
             active_orders_count=self.active_orders_count,
             cooldown_remaining_seconds=max(0, int(self.settings.COOLDOWN_SECONDS - (datetime.now(timezone.utc).timestamp() - self.risk_manager.last_trade_closed_time))) if self.risk_manager.last_trade_closed_time > 0 else 0,
             circuit_breaker_triggered=self.risk_manager.circuit_breaker_active,
@@ -317,4 +513,3 @@ def get_bot_service() -> BotService:
     if _bot_service is None:
         _bot_service = BotService()
     return _bot_service
-

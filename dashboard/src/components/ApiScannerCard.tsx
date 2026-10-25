@@ -20,94 +20,95 @@ export const ApiScannerCard: React.FC = () => {
   };
 
   return (
-    <div className="bg-[#151A23] border border-[#232936] rounded-xl p-5 shadow-sm">
-      <div className="flex justify-between items-center mb-4">
+    <div className="space-y-3">
+      <div className="flex justify-between items-center text-xs font-mono text-slate-400">
         <div className="flex items-center space-x-2">
-          <Radio className="w-4 h-4 text-emerald-400" />
-          <h2 className="text-base font-semibold text-white">API Connection Scanner</h2>
+          <Radio className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Delta Exchange India Testnet Gateway Diagnostics</span>
         </div>
         <button
           onClick={handleScan}
           disabled={scanning}
-          className="flex items-center space-x-1.5 text-xs bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded-lg transition-colors"
+          className="flex items-center space-x-1.5 text-xs bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-3 py-1 rounded-md transition-colors font-mono"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${scanning ? 'animate-spin' : ''}`} />
-          <span>{scanning ? 'Scanning...' : 'Run Connectivity Scan'}</span>
+          <RefreshCw className={`w-3 h-3 ${scanning ? 'animate-spin' : ''}`} />
+          <span>{scanning ? 'Pinging Gateway...' : 'Run Connectivity Scan'}</span>
         </button>
       </div>
 
       {result ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {/* REST Status */}
-          <div className="bg-[#10141D] p-3 rounded-lg border border-[#1E2430]">
+          <div className="bg-[#0C1017] p-3 rounded-lg border border-[#161D29]">
             <div className="flex justify-between items-center text-xs text-slate-400 mb-1">
-              <span>REST Gateway</span>
+              <span className="font-mono text-[11px]">REST GATEWAY</span>
               {result.rest_connected ? (
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
               ) : (
                 <XCircle className="w-3.5 h-3.5 text-red-400" />
               )}
             </div>
-            <div className="text-xs font-mono font-semibold text-white truncate">
+            <div className="text-xs font-mono font-bold text-white truncate">
               {result.rest_connected ? 'Connected (200 OK)' : 'Unreachable'}
             </div>
-            <div className="text-[10px] text-slate-500 mt-1 truncate">
+            <div className="text-[10px] font-mono text-slate-500 mt-1 truncate">
               {result.rest_url}
             </div>
           </div>
 
           {/* Latency */}
-          <div className="bg-[#10141D] p-3 rounded-lg border border-[#1E2430]">
+          <div className="bg-[#0C1017] p-3 rounded-lg border border-[#161D29]">
             <div className="flex justify-between items-center text-xs text-slate-400 mb-1">
-              <span>Roundtrip Ping</span>
+              <span className="font-mono text-[11px]">ROUNDTRIP PING</span>
               <Zap className="w-3.5 h-3.5 text-amber-400" />
             </div>
             <div className="text-base font-bold font-mono text-emerald-400">
               {result.rest_latency_ms} <span className="text-xs text-slate-400 font-normal">ms</span>
             </div>
-            <div className="text-[10px] text-slate-500 mt-1">
-              {result.rest_latency_ms < 150 ? 'Fast Response' : 'Normal Latency'}
+            <div className="text-[10px] font-mono text-slate-500 mt-1">
+              {result.rest_latency_ms < 150 ? 'Optimal Low Latency' : 'Standard Latency'}
             </div>
           </div>
 
           {/* Auth Verification */}
-          <div className="bg-[#10141D] p-3 rounded-lg border border-[#1E2430]">
+          <div className="bg-[#0C1017] p-3 rounded-lg border border-[#161D29]">
             <div className="flex justify-between items-center text-xs text-slate-400 mb-1">
-              <span>API Key Status</span>
+              <span className="font-mono text-[11px]">HMAC-SHA256 AUTH</span>
               {result.credentials_valid ? (
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
               ) : (
                 <Clock className="w-3.5 h-3.5 text-amber-400" />
               )}
             </div>
-            <div className="text-xs font-mono font-semibold text-slate-200">
+            <div className="text-xs font-mono font-bold text-slate-200">
               {result.auth_status}
             </div>
-            <div className="text-[10px] text-slate-500 mt-1">
-              HMAC-SHA256 Signed
+            <div className="text-[10px] font-mono text-slate-500 mt-1">
+              Deterministic Canonical Signature
             </div>
           </div>
 
           {/* Testnet Catalog */}
-          <div className="bg-[#10141D] p-3 rounded-lg border border-[#1E2430]">
+          <div className="bg-[#0C1017] p-3 rounded-lg border border-[#161D29]">
             <div className="flex justify-between items-center text-xs text-slate-400 mb-1">
-              <span>Testnet Markets</span>
-              <span className="text-[10px] text-emerald-400 font-mono">Live</span>
+              <span className="font-mono text-[11px]">PERPETUAL PAIRS</span>
+              <span className="text-[10px] text-emerald-400 font-mono font-bold">Catalog OK</span>
             </div>
             <div className="text-base font-bold font-mono text-slate-200">
-              {result.product_count} <span className="text-xs text-slate-400 font-normal">Pairs</span>
+              {result.product_count} <span className="text-xs text-slate-400 font-normal">Contracts</span>
             </div>
-            <div className="text-[10px] text-slate-500 mt-1">
-              Health: {result.status_summary}
+            <div className="text-[10px] font-mono text-slate-500 mt-1">
+              Fail-Closed Testnet Allowlist
             </div>
           </div>
         </div>
       ) : (
-        <div className="bg-[#10141D] border border-dashed border-[#1E2430] rounded-lg p-6 text-center text-xs text-slate-500">
-          Click <strong>"Run Connectivity Scan"</strong> to probe Delta Testnet endpoints, latency, and signature verification.
+        <div className="bg-[#0C1017] border border-[#161D29] rounded-lg p-6 text-center space-y-2">
+          <p className="text-xs font-mono text-slate-400">
+            Click &ldquo;Run Connectivity Scan&rdquo; to test live REST latency, Delta HMAC signature verification, and product catalog synchronization.
+          </p>
         </div>
       )}
     </div>
   );
 };
-

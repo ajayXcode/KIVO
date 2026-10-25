@@ -42,8 +42,9 @@ class ExecutionManager:
         if not risk.approved:
             return False, f"Trade intent rejected by risk manager: {risk.reason}", None
 
-        side = OrderSide.BUY.value if action == SignalAction.LONG else OrderSide.SELL.value
+        side = OrderSide.BUY.value if action in (SignalAction.LONG, SignalAction.BUY_CALL, SignalAction.BUY_PUT) else OrderSide.SELL.value
         client_id = self.generate_client_order_id(prefix="ent")
+
 
         async with get_db_session() as session:
             order_record = OrderRecord(

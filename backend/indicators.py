@@ -182,3 +182,71 @@ def calculate_atr(
 
     return atr
 
+
+def calculate_supertrend(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    closes: np.ndarray,
+    period: int = 10,
+    multiplier: float = 3.0
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Calculate Supertrend indicator.
+    Returns:
+        supertrend: array of active trailing line values
+        direction: array of trend direction (+1 for Bullish, -1 for Bearish)
+        final_upper: array of upper band values
+        final_lower: array of lower band values
+    """
+    n = len(closes)
+    supertrend = np.full(n, np.nan, dtype=float)
+    direction = np.zeros(n, dtype=int)
+    final_upper = np.full(n, np.nan, dtype=float)
+    final_lower = np.full(n, np.nan, dtype=float)
+
+    if n <= period:
+        return supertrend, direction, final_upper, final_lower
+
+    atr = calculate_atr(highs, lows, closes, period)
+    hl2 = (highs + lows) / 2.0
+    basic_upper = hl2 + (multiplier * atr)
+    basic_lower = hl2 - (multiplier * atr)
+
+    start_idx = period
+    final_upper[start_idx] = basic_upper[start_idx]
+    final_lower[start_idx] = basic_lower[start_idx]
+    direction[start_idx] = 1 if closes[start_idx] >= hl2[start_idx] else -1
+    supertrend[start_idx] = final_lower[start_idx] if direction[start_idx] == 1 else final_upper[start_idx]
+
+    for i in range(start_idx + 1, n):
+        # Calculate final upper band
+        if basic_upper[i] < final_upper[i - 1] or closes[i - 1] > final_upper[i - 1]:
+            final_upper[i] = basic_upper[i]
+        else:
+            final_upper[i] = final_upper[i - 1]
+
+        # Calculate final lower band
+        if basic_lower[i] > final_lower[i - 1] or closes[i - 1] < final_lower[i - 1]:
+            final_lower[i] = basic_lower[i]
+        else:
+            final_lower[i] = final_lower[i - 1]
+
+        # Determine trend direction
+        prev_dir = direction[i - 1]
+        if prev_dir == 1:
+            if closes[i] < final_lower[i]:
+                current_dir = -1
+            else:
+                current_dir = 1
+        else:
+            if closes[i] > final_upper[i]:
+                current_dir = 1
+            else:
+                current_dir = -1
+
+        direction[i] = current_dir
+        supertrend[i] = final_lower[i] if current_dir == 1 else final_upper[i]
+
+    return supertrend, direction, final_upper, final_lower
+
+

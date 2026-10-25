@@ -5,7 +5,8 @@ import {
   EventItem,
   WatchlistItem,
   ApiScannerResult,
-  CredentialsStatus
+  CredentialsStatus,
+  ChartCandle
 } from './types';
 
 const BASE_URL = '/api';
@@ -136,4 +137,71 @@ export async function sendReconcile(): Promise<void> {
   });
   if (!res.ok) throw new Error(`Failed to reconcile: ${res.statusText}`);
 }
+
+export async function fetchChartData(): Promise<ChartCandle[]> {
+  try {
+    const res = await fetch(`${BASE_URL}/chart`);
+    if (!res.ok) return [];
+    return res.json();
+  } catch {
+    return [];
+  }
+}
+
+
+export async function saveOptionConfig(config: any): Promise<any> {
+
+  const res = await fetch(`${BASE_URL}/control/option-config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) throw new Error('Failed to update option configuration');
+  return res.json();
+}
+
+export async function switchAsset(symbol: string): Promise<any> {
+  const res = await fetch(`${BASE_URL}/control/switch-asset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ symbol }),
+  });
+  if (!res.ok) throw new Error(`Failed to switch asset to ${symbol}`);
+  return res.json();
+}
+
+export async function clearSession(): Promise<any> {
+  const res = await fetch(`${BASE_URL}/control/clear-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) throw new Error('Failed to clear session');
+  return res.json();
+}
+
+export function playTradeChime() {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    // Pleasant two-tone chime (F#5 to C#6)
+    osc.frequency.setValueAtTime(739.99, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1108.73, ctx.currentTime + 0.12);
+
+    gain.gain.setValueAtTime(0.18, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.45);
+  } catch (e) {
+    console.debug('Audio chime playback notice:', e);
+  }
+}
+
 

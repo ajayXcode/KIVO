@@ -82,20 +82,22 @@ class RiskManager:
         stop_dist = max(entry_price * 0.005, min(entry_price * 0.02, atr * 1.5))
         tp_dist = stop_dist * 1.5
 
-        if signal.action == SignalAction.LONG:
+        is_buying = signal.action in (SignalAction.LONG, SignalAction.BUY_CALL, SignalAction.BUY_PUT)
+        if is_buying:
             stop_price = round(entry_price - stop_dist, 2)
             take_profit_price = round(entry_price + tp_dist, 2)
-            per_contract_loss = entry_price - stop_price
+            per_contract_loss = max(0.1, entry_price - stop_price)
         else:
             stop_price = round(entry_price + stop_dist, 2)
             take_profit_price = round(entry_price - tp_dist, 2)
-            per_contract_loss = stop_price - entry_price
+            per_contract_loss = max(0.1, stop_price - entry_price)
 
-        if per_contract_loss <= 0:
-            return RiskEvaluation(approved=False, reason="RISK_CALCULATION_ERROR: Invalid stop distance.")
+        if signal.action in (SignalAction.BUY_CALL, SignalAction.BUY_PUT):
+            calculated_size = float(self.settings.CONTRACTS_COUNT)
+        else:
+            raw_size = risk_budget_usd / per_contract_loss
+            calculated_size = max(1.0, round(raw_size, 1))
 
-        raw_size = risk_budget_usd / per_contract_loss
-        calculated_size = max(1.0, round(raw_size, 1))
 
         return RiskEvaluation(
             approved=True,

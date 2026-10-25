@@ -270,3 +270,62 @@ class DeltaClient:
         res = await self._request("GET", "/v2/fills", params=params, authenticated=True)
         return res.get("result", [])
 
+    async def get_option_quote(self, symbol: str) -> Dict[str, Any]:
+        """Fetch real-time ticker and orderbook quote for an option contract."""
+        return await self.get_ticker(symbol)
+
+    async def find_atm_option(
+        self,
+        underlying_asset: str,
+        signal_direction: str,
+        spot_price: float
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Dynamically locate the At-The-Money (ATM) option contract for BTC, ETH, or XAUT.
+        Selects call_options if signal is Bullish (BUY_CALL/LONG), or put_options if Bearish (BUY_PUT/SHORT).
+        Filters by nearest upcoming operational expiry and minimum strike delta from spot.
+        """
+        underlying = underlying_asset.upper().strip()
+        is_call = signal_direction.upper() in ("BUY_CALL", "LONG", "BULLISH", "BUY")
+        target_type = "call_options" if is_call else "put_options"
+
+        products = await self.get_products()
+        eligible = []
+        for p in products:
+            if p.get("contract_type") != target_type:
+                continue
+            sym = p.get("symbol", "")
+            # Verify asset match in symbol (e.g. C-BTC-, P-ETH-, C-XAUT-)
+            if f"-{underlying}-" not in sym and not sym.startswith(f"C-{underlying}") and not sym.startswith(f"P-{underlying}"):
+                continue
+            if p.get("trading_status") != "operational":
+                continue
+
+            strike_val = p.get("strike_price")
+            if not strike_val:
+                continue
+            try:
+                strike_flt = float(strike_val)
+            except (ValueError, TypeError):
+                continue
+
+            eligible.append((p, strike_flt))
+
+        if not eligible:
+            logger.warning(f"No operational {target_type} found for {underlying}")
+            return None
+
+        # Sort by nearest settlement time first, then closest strike to spot_price
+        eligible.sort(key=lambda item: (
+            item[0].get("settlement_time") or "9999",
+            abs(item[1] - spot_price)
+        ))
+
+        selected_product, strike = eligible[0]
+        logger.info(
+            f"Selected ATM {'Call' if is_call else 'Put'} for {underlying} (Spot: {spot_price}): "
+            f"{selected_product.get('symbol')} (Strike: {strike}, Expiry: {selected_product.get('settlement_time')})"
+        )
+        return selected_product
+
+

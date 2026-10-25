@@ -1,7 +1,15 @@
 import React, { useState } from 'react';
-import { Play, Pause, AlertOctagon, RefreshCw, XCircle, Bot, Hand } from 'lucide-react';
+import { Play, Pause, AlertOctagon, RefreshCw, XCircle, Bot, Hand, ShieldAlert, Cpu, RotateCcw } from 'lucide-react';
 import { BotStatus } from '../types';
-import { sendPause, sendResume, sendKill, sendReconcile, sendClosePosition, setAutomationMode } from '../api';
+import {
+  sendPause,
+  sendResume,
+  sendKill,
+  sendReconcile,
+  sendClosePosition,
+  setAutomationMode,
+  clearSession
+} from '../api';
 
 interface ControlsCardProps {
   status: BotStatus | null;
@@ -12,6 +20,8 @@ export const ControlsCard: React.FC<ControlsCardProps> = ({ status, onRefresh })
   const [loading, setLoading] = useState(false);
   const [confirmKill, setConfirmKill] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
+  const [confirmClearSession, setConfirmClearSession] = useState(false);
+
   const state = status?.state ?? 'INITIALIZING';
   const isAutoPilot = status?.automation_mode === 'AUTO_PILOT';
   const hasPosition = (status?.current_position_size ?? 0) !== 0;
@@ -22,7 +32,7 @@ export const ControlsCard: React.FC<ControlsCardProps> = ({ status, onRefresh })
       await sendPause();
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      alert(`Pause failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -34,7 +44,7 @@ export const ControlsCard: React.FC<ControlsCardProps> = ({ status, onRefresh })
       await sendResume();
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      alert(`Resume failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -47,7 +57,7 @@ export const ControlsCard: React.FC<ControlsCardProps> = ({ status, onRefresh })
       setConfirmKill(false);
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      alert(`Emergency kill failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -60,7 +70,20 @@ export const ControlsCard: React.FC<ControlsCardProps> = ({ status, onRefresh })
       setConfirmClose(false);
       onRefresh();
     } catch (err: any) {
-      alert(`Failed to close position: ${err.message}`);
+      alert(`Market flatten failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearSession = async () => {
+    try {
+      setLoading(true);
+      await clearSession();
+      setConfirmClearSession(false);
+      onRefresh();
+    } catch (err: any) {
+      alert(`Safety clear session failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -72,7 +95,7 @@ export const ControlsCard: React.FC<ControlsCardProps> = ({ status, onRefresh })
       await setAutomationMode(!isAutoPilot);
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      alert(`Could not toggle automation mode: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -84,72 +107,69 @@ export const ControlsCard: React.FC<ControlsCardProps> = ({ status, onRefresh })
       await sendReconcile();
       onRefresh();
     } catch (err: any) {
-      alert(err.message);
+      alert(`Reconcile failed: ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="bg-[#151A23] border border-[#232936] rounded-xl p-5 shadow-sm space-y-4">
-      <div className="flex justify-between items-center">
-        <div>
-          <h2 className="text-base font-semibold text-white">Execution & Automation Controls</h2>
-          <p className="text-xs text-slate-400">Tactical controls, emergency stops, and automation mode</p>
+    <div className="graphite-panel p-4 rounded-xl border border-violet-500/20 bg-[#131020]/80 shadow-lg space-y-3.5">
+      {/* Header */}
+      <div className="flex justify-between items-center border-b border-violet-500/15 pb-2.5">
+        <div className="flex items-center space-x-2">
+          <Cpu className="w-4 h-4 text-violet-400" />
+          <h2 className="text-xs font-mono font-bold text-white uppercase tracking-wider">Tactical Bridge</h2>
         </div>
         <button
           onClick={handleReconcile}
           disabled={loading}
-          className="flex items-center space-x-1.5 text-xs bg-[#1E2430] hover:bg-[#283142] text-slate-300 px-3 py-1.5 rounded-lg border border-[#2D3748] transition-colors"
-          title="Force exchange reconciliation"
+          className="flex items-center space-x-1 text-[11px] font-mono text-violet-300 hover:text-white bg-violet-950/40 hover:bg-violet-900/50 px-2.5 py-1 rounded-md border border-violet-800/40 transition-colors"
+          title="Force authoritative sync with Delta Testnet"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-          <span>Reconcile</span>
+          <RefreshCw className={`w-3 h-3 text-violet-400 ${loading ? 'animate-spin' : ''}`} />
+          <span>Sync</span>
         </button>
       </div>
 
       {/* Automation Mode Switcher */}
-      <div className="bg-[#10141D] p-3 rounded-lg border border-[#1E2430] flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          {isAutoPilot ? (
-            <Bot className="w-4 h-4 text-emerald-400" />
-          ) : (
-            <Hand className="w-4 h-4 text-amber-400" />
-          )}
+      <div className="bg-[#0f0d1b] p-3 rounded-lg border border-violet-500/15 flex items-center justify-between">
+        <div className="flex items-center space-x-2.5">
+          <div className={`p-1.5 rounded-md ${isAutoPilot ? 'bg-emerald-500/10 text-emerald-400' : 'bg-amber-500/10 text-amber-400'}`}>
+            {isAutoPilot ? <Bot className="w-4 h-4" /> : <Hand className="w-4 h-4" />}
+          </div>
           <div>
-            <div className="text-xs font-bold text-white">
-              {isAutoPilot ? 'AUTO-PILOT ACTIVE' : 'MANUAL ADVISORY MODE'}
+            <div className="text-xs font-mono font-bold text-white">
+              {isAutoPilot ? 'AUTONOMOUS EXECUTION' : 'MANUAL APPROVALS'}
             </div>
-            <p className="text-[10px] text-slate-500">
-              {isAutoPilot
-                ? 'Automated trade execution enabled upon approved risk & signal.'
-                : 'Signals generate alerts only; manual trigger required.'}
+            <p className="text-[10px] text-slate-400 font-mono">
+              {isAutoPilot ? 'Bot buys confirmed ATM options on signal' : 'Manual operator review'}
             </p>
           </div>
         </div>
         <button
           onClick={handleToggleAutomation}
           disabled={loading}
-          className={`text-xs px-3 py-1.5 rounded-lg font-semibold border transition-all ${
+          className={`text-[11px] font-mono font-bold px-2.5 py-1.5 rounded-md border transition-all ${
             isAutoPilot
-              ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40 hover:bg-emerald-500/30'
-              : 'bg-amber-500/20 text-amber-400 border-amber-500/40 hover:bg-amber-500/30'
+              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30 hover:bg-emerald-500/25 pro-glow-emerald'
+              : 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
           }`}
         >
-          {isAutoPilot ? 'Disable Auto' : 'Enable Auto-Pilot'}
+          {isAutoPilot ? 'Switch Manual' : 'Enable Auto'}
         </button>
       </div>
 
-      {/* Main Tactical Buttons */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {/* Execution Actions Grid */}
+      <div className="grid grid-cols-2 gap-2">
         {/* Resume */}
         <button
           onClick={handleResume}
           disabled={loading || state === 'RUNNING' || status?.circuit_breaker_triggered}
-          className={`flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-lg font-semibold text-xs transition-all shadow-sm ${
+          className={`flex items-center justify-center space-x-1.5 py-2 px-3 rounded-lg font-mono font-bold text-xs transition-all ${
             state === 'RUNNING'
-              ? 'bg-emerald-950/40 text-emerald-700 border border-emerald-900/40 cursor-not-allowed'
-              : 'bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold'
+              ? 'bg-[#181428] text-slate-600 border border-violet-900/20 cursor-not-allowed'
+              : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white pro-glow-emerald'
           }`}
         >
           <Play className="w-3.5 h-3.5 fill-current" />
@@ -160,78 +180,129 @@ export const ControlsCard: React.FC<ControlsCardProps> = ({ status, onRefresh })
         <button
           onClick={handlePause}
           disabled={loading || state === 'PAUSED' || state === 'HALTED'}
-          className={`flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-lg font-semibold text-xs transition-all border ${
+          className={`flex items-center justify-center space-x-1.5 py-2 px-3 rounded-lg font-mono font-bold text-xs border transition-all ${
             state === 'PAUSED'
-              ? 'bg-amber-950/20 text-amber-700 border-amber-900/30 cursor-not-allowed'
-              : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/30'
+              ? 'bg-[#181428] text-slate-600 border-violet-900/20 cursor-not-allowed'
+              : 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border-amber-500/30'
           }`}
         >
           <Pause className="w-3.5 h-3.5" />
           <span>Pause</span>
         </button>
 
-        {/* Emergency Flatten / Close Position */}
+        {/* Panic Flatten / Market Close */}
         {confirmClose ? (
           <div className="flex space-x-1 col-span-1">
             <button
               onClick={handleClosePosition}
               disabled={loading}
-              className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-1 rounded-lg text-[10px]"
+              className="flex-1 bg-red-600 hover:bg-red-700 text-white font-mono font-bold py-1.5 px-1 rounded text-[10px]"
             >
-              Confirm Close
+              Confirm Flatten
             </button>
             <button
               onClick={() => setConfirmClose(false)}
-              className="bg-slate-800 text-slate-300 py-2 px-1 rounded-lg text-[10px]"
+              className="bg-slate-800 text-slate-300 font-mono text-[10px] px-2 py-1.5 rounded"
             >
-              Cancel
+              X
             </button>
           </div>
         ) : (
           <button
             onClick={() => setConfirmClose(true)}
             disabled={loading || !hasPosition}
-            className={`flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-lg font-semibold text-xs border transition-colors ${
+            className={`flex items-center justify-center space-x-1.5 py-2 px-3 rounded-lg font-mono font-bold text-xs border transition-all ${
               hasPosition
-                ? 'bg-orange-500/20 hover:bg-orange-500/30 text-orange-400 border-orange-500/40'
-                : 'bg-slate-900/40 text-slate-600 border-slate-800 cursor-not-allowed'
+                ? 'bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border-rose-500/30 pro-glow-red'
+                : 'bg-[#181428] text-slate-600 border-violet-900/20 cursor-not-allowed'
             }`}
-            title="Market close active position immediately"
+            title="Instant market close of active option position"
           >
             <XCircle className="w-3.5 h-3.5" />
-            <span>Flatten (Stop)</span>
+            <span>Close Option</span>
           </button>
         )}
 
-        {/* Emergency Kill Switch */}
+        {/* Emergency Kill */}
         {confirmKill ? (
           <div className="flex space-x-1 col-span-1">
             <button
               onClick={handleKill}
               disabled={loading}
-              className="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-1 rounded-lg text-[10px] animate-pulse"
+              className="flex-1 bg-red-700 hover:bg-red-800 text-white font-mono font-extrabold py-1.5 px-1 rounded text-[10px] animate-pulse"
             >
-              Confirm
+              HALT BOT
             </button>
             <button
               onClick={() => setConfirmKill(false)}
-              className="bg-slate-800 text-slate-300 py-2 px-1 rounded-lg text-[10px]"
+              className="bg-slate-800 text-slate-300 font-mono text-[10px] px-2 py-1.5 rounded"
             >
-              Cancel
+              X
             </button>
           </div>
         ) : (
           <button
             onClick={() => setConfirmKill(true)}
             disabled={loading || state === 'HALTED'}
-            className="flex items-center justify-center space-x-1.5 py-2.5 px-3 rounded-lg font-semibold text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/40 transition-colors"
+            className={`flex items-center justify-center space-x-1.5 py-2 px-3 rounded-lg font-mono font-bold text-xs border transition-all ${
+              state === 'HALTED'
+                ? 'bg-[#181428] text-slate-600 border-violet-900/20 cursor-not-allowed'
+                : 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30'
+            }`}
           >
             <AlertOctagon className="w-3.5 h-3.5" />
             <span>Kill Switch</span>
           </button>
         )}
       </div>
+
+      {/* Safety: Stop, Close Tracked Positions & Fresh Start */}
+      <div className="pt-1">
+        {confirmClearSession ? (
+          <div className="flex items-center space-x-1.5 p-2 rounded-lg bg-red-950/40 border border-red-500/40">
+            <button
+              onClick={handleClearSession}
+              disabled={loading}
+              className="flex-1 bg-red-600 hover:bg-red-500 text-white font-mono font-bold py-1.5 px-2 rounded text-xs flex items-center justify-center space-x-1"
+            >
+              <RotateCcw className="w-3.5 h-3.5 animate-spin" />
+              <span>Confirm Safety Clear & Reset</span>
+            </button>
+            <button
+              onClick={() => setConfirmClearSession(false)}
+              className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded font-mono text-xs"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmClearSession(true)}
+            disabled={loading}
+            className="w-full py-2 px-3 rounded-lg bg-violet-950/40 hover:bg-violet-900/60 border border-violet-500/25 hover:border-violet-500/50 text-violet-300 font-mono text-xs font-semibold flex items-center justify-center space-x-1.5 transition-all"
+            title="Stop & close tracked option positions, purge session data for a fresh start"
+          >
+            <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+            <span>Safety: Stop, Close & Reset Session</span>
+          </button>
+        )}
+      </div>
+
+      {/* Safety Risk Guard Metrics */}
+      <div className="bg-[#0f0d1b] p-2.5 rounded-lg border border-violet-500/15 space-y-1.5 text-[10px] font-mono">
+        <div className="flex justify-between text-slate-400">
+          <span>RISK BUDGET PER TRADE:</span>
+          <span className="text-slate-200 font-bold">0.25% ($25.00)</span>
+        </div>
+        <div className="flex justify-between text-slate-400">
+          <span>MAX DAILY LOSS CIRCUIT:</span>
+          <span className="text-rose-400 font-bold">1.50% ($150.00)</span>
+        </div>
+        <div className="flex justify-between text-slate-400">
+          <span>CONCURRENT OPTION TRADES:</span>
+          <span className="text-violet-300 font-bold">MAX 1 (STRICT)</span>
+        </div>
+      </div>
     </div>
   );
 };
-

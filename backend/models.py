@@ -32,6 +32,8 @@ class AutomationMode(str, Enum):
 
 
 class SignalAction(str, Enum):
+    BUY_CALL = "BUY_CALL"
+    BUY_PUT = "BUY_PUT"
     LONG = "LONG"
     SHORT = "SHORT"
     NO_TRADE = "NO_TRADE"
@@ -116,6 +118,32 @@ class SignalRecord(Base):
 # Pydantic Schemas
 # ==============================================================================
 
+class AtmOptionInfo(BaseModel):
+    product_id: int
+    symbol: str
+    option_type: str  # "CALL" or "PUT"
+    strike_price: float
+    settlement_time: str
+    quote_price: float = 0.0
+    option_atr: float = 0.0
+    stop_loss_price: float = 0.0
+    take_profit_price: float = 0.0
+    stop_loss_label: str = ""
+    take_profit_label: str = ""
+
+
+class OptionConfigPayload(BaseModel):
+    underlying_asset: str = "BTC"
+    timeframe: str = "5m"
+    contracts: int = 1
+    supertrend_period: int = 10
+    supertrend_multiplier: float = 3.0
+    ema_period: int = 20
+    option_atr_period: int = 14
+    sl_atr_multiplier: float = 1.5
+    tp_atr_multiplier: float = 2.5
+
+
 class IndicatorSnapshot(BaseModel):
     ema20: float
     ema50: float
@@ -127,6 +155,10 @@ class IndicatorSnapshot(BaseModel):
     bb_lower: float = 0.0
     bb_bandwidth: float = 0.0
     atr14: float = 0.0
+    supertrend: float = 0.0
+    supertrend_direction: int = 0
+    supertrend_label: str = "NEUTRAL"
+    option_atr: float = 0.0
     trend_bullish: bool
     warmup_complete: bool
 
@@ -155,6 +187,7 @@ class BotStatusResponse(BaseModel):
     environment: str
     symbol: str
     product_id: int
+    underlying_asset: str = "BTC"
     automation_mode: AutomationMode
     test_equity_usd: float
     current_position_size: float
@@ -165,6 +198,8 @@ class BotStatusResponse(BaseModel):
     latest_price: Optional[float] = None
     latest_signal: Optional[SignalResult] = None
     indicators: Optional[IndicatorSnapshot] = None
+    atm_option: Optional[AtmOptionInfo] = None
+    option_config: Optional[OptionConfigPayload] = None
     active_orders_count: int = 0
     cooldown_remaining_seconds: int = 0
     circuit_breaker_triggered: bool = False
@@ -172,6 +207,7 @@ class BotStatusResponse(BaseModel):
     credentials_configured: bool = False
     masked_api_key: str = "Not Configured"
     last_reconciliation_time: Optional[datetime] = None
+
 
 
 class WatchlistItem(BaseModel):
@@ -222,4 +258,13 @@ class SymbolSwitchPayload(BaseModel):
 
 class ControlRequest(BaseModel):
     reason: Optional[str] = "Operator manual intervention"
+
+
+class SessionResetResponse(BaseModel):
+    success: bool
+    message: str
+    positions_closed: int = 0
+    orders_cancelled: int = 0
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 

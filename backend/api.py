@@ -22,12 +22,15 @@ from backend.models import (
     CredentialsPayload,
     CredentialsStatus,
     EventLog,
+    OptionConfigPayload,
     OrderRecord,
     PositionRecord,
+    SessionResetResponse,
     SignalRecord,
     SymbolSwitchPayload,
     WatchlistItem,
 )
+
 
 settings = get_settings()
 
@@ -191,6 +194,13 @@ async def get_overview() -> BotStatusResponse:
     return service.get_status()
 
 
+@app.get("/api/chart")
+async def get_chart_data() -> List[Dict[str, Any]]:
+    """Return historical 5m candle chart data with technical overlays."""
+    service = get_bot_service()
+    return service.get_chart_data()
+
+
 @app.get("/api/signals")
 async def get_signals(limit: int = 50) -> List[Dict[str, Any]]:
     async with get_db_session() as session:
@@ -336,6 +346,34 @@ async def control_close_position() -> Dict[str, Any]:
     }
 
 
+@app.post("/api/control/option-config")
+async def control_option_config(req: OptionConfigPayload) -> Dict[str, Any]:
+    """Configure Option Buying parameters: BTC/ETH/XAUT, Supertrend, EMA, and Option ATR brackets."""
+    service = get_bot_service()
+    await service.update_option_config(req)
+    return {"success": True, "config": req.model_dump()}
+
+
+@app.post("/api/control/switch-asset")
+async def control_switch_asset(req: SymbolSwitchPayload) -> Dict[str, Any]:
+    """Switch active underlying asset (BTC, ETH, XAUT)."""
+    service = get_bot_service()
+    success = await service.switch_underlying_asset(req.symbol)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Asset {req.symbol} could not be selected on Delta Exchange Testnet."
+        )
+    return {"success": True, "underlying_asset": service.settings.UNDERLYING_ASSET, "symbol": service.settings.SYMBOL}
+
+
+@app.post("/api/control/clear-session", response_model=SessionResetResponse)
+async def control_clear_session() -> SessionResetResponse:
+    """Safety feature: Stop and close tracked option positions, clear session data for a fresh start."""
+    service = get_bot_service()
+    return await service.clear_session()
+
+
 @app.post("/api/control/reconcile")
 async def control_reconcile() -> Dict[str, Any]:
     service = get_bot_service()
@@ -350,6 +388,7 @@ async def control_reconcile() -> Dict[str, Any]:
         "reconciled_position_size": size,
         "unrealized_pnl": upnl
     }
+
 
 
 # ==============================================================================

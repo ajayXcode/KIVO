@@ -35,12 +35,23 @@ class Settings(BaseSettings):
     DELTA_API_KEY: str = Field(default="", description="Delta Testnet API Key")
     DELTA_API_SECRET: str = Field(default="", description="Delta Testnet API Secret")
 
-    # Market & Watchlist Settings
+    # Market & Option Buying Settings
+    UNDERLYING_ASSET: str = Field(default="BTC", description="Underlying Asset: BTC, ETH, XAUT")
     SYMBOL: str = Field(default="BTCUSD")
     PRODUCT_ID: int = Field(default=84)
-    WATCHLIST_SYMBOLS: List[str] = Field(default=["BTCUSD", "ETHUSD", "SOLUSD", "XRPUSD"])
+    WATCHLIST_SYMBOLS: List[str] = Field(default=["BTCUSD", "ETHUSD", "XAUTUSD", "SOLUSD"])
+    TIMEFRAME: str = Field(default="5m", description="Strategy execution timeframe")
     TREND_TIMEFRAME: str = Field(default="15m")
     ENTRY_TIMEFRAME: str = Field(default="5m")
+
+    # Option Strategy & Contract Controls
+    CONTRACTS_COUNT: int = Field(default=1, description="Number of option contracts per order")
+    SUPERTREND_PERIOD: int = Field(default=10, description="Supertrend ATR period")
+    SUPERTREND_MULT: float = Field(default=3.0, description="Supertrend multiplier")
+    EMA_PERIOD: int = Field(default=20, description="EMA trend/pullback filter period")
+    OPTION_ATR_PERIOD: int = Field(default=14, description="Option ATR period")
+    SL_ATR_MULT: float = Field(default=1.5, description="Stop-Loss ATR Multiplier")
+    TP_ATR_MULT: float = Field(default=2.5, description="Target ATR Multiplier")
 
     # Indicator Baselines
     EMA_FAST: int = Field(default=20)

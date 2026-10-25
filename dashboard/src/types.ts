@@ -1,5 +1,32 @@
 export type BotState = 'INITIALIZING' | 'READY' | 'RUNNING' | 'PAUSED' | 'HALTED' | 'ERROR';
 export type AutomationMode = 'AUTO_PILOT' | 'MANUAL';
+export type UnderlyingAsset = 'BTC' | 'ETH' | 'XAUT';
+
+export interface AtmOptionInfo {
+  product_id: number;
+  symbol: string;
+  option_type: 'CALL' | 'PUT';
+  strike_price: number;
+  settlement_time: string;
+  quote_price: number;
+  option_atr: number;
+  stop_loss_price: number;
+  take_profit_price: number;
+  stop_loss_label: string;
+  take_profit_label: string;
+}
+
+export interface OptionConfig {
+  underlying_asset: UnderlyingAsset;
+  timeframe: string;
+  contracts: number;
+  supertrend_period: number;
+  supertrend_multiplier: number;
+  ema_period: number;
+  option_atr_period: number;
+  sl_atr_multiplier: number;
+  tp_atr_multiplier: number;
+}
 
 export interface IndicatorSnapshot {
   ema20: number;
@@ -12,12 +39,16 @@ export interface IndicatorSnapshot {
   bb_lower?: number;
   bb_bandwidth?: number;
   atr14?: number;
+  supertrend?: number;
+  supertrend_direction?: number;
+  supertrend_label?: string;
+  option_atr?: number;
   trend_bullish: boolean;
   warmup_complete: boolean;
 }
 
 export interface SignalResult {
-  action: 'LONG' | 'SHORT' | 'NO_TRADE';
+  action: 'BUY_CALL' | 'BUY_PUT' | 'LONG' | 'SHORT' | 'NO_TRADE';
   symbol: string;
   price: number;
   indicators: IndicatorSnapshot;
@@ -30,6 +61,7 @@ export interface BotStatus {
   environment: string;
   symbol: string;
   product_id: number;
+  underlying_asset?: UnderlyingAsset;
   automation_mode: AutomationMode;
   test_equity_usd: number;
   current_position_size: number;
@@ -40,6 +72,8 @@ export interface BotStatus {
   latest_price?: number;
   latest_signal?: SignalResult;
   indicators?: IndicatorSnapshot;
+  atm_option?: AtmOptionInfo;
+  option_config?: OptionConfig;
   active_orders_count: number;
   cooldown_remaining_seconds: number;
   circuit_breaker_triggered: boolean;
@@ -55,7 +89,7 @@ export interface WatchlistItem {
   price: number;
   change_24h_pct: number;
   trend: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-  signal: 'LONG' | 'SHORT' | 'NO_TRADE';
+  signal: 'BUY_CALL' | 'BUY_PUT' | 'LONG' | 'SHORT' | 'NO_TRADE';
   rsi: number;
   is_active: boolean;
 }
@@ -79,6 +113,23 @@ export interface CredentialsStatus {
   masked_key: string;
   has_secret: boolean;
   environment: string;
+}
+
+export interface ChartCandle {
+  time: string;
+  timestamp: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  ema?: number;
+  ema20?: number;
+  supertrend?: number;
+  supertrend_direction?: number;
+  bb_upper?: number;
+  bb_lower?: number;
+  rsi?: number;
 }
 
 export interface OrderItem {
@@ -115,3 +166,10 @@ export interface EventItem {
   details?: string;
 }
 
+export interface SessionResetResponse {
+  success: boolean;
+  message: string;
+  positions_closed: number;
+  orders_cancelled: number;
+  timestamp: string;
+}

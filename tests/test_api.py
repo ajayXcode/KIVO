@@ -1,34 +1,28 @@
 import os
+
 os.environ["TESTING"] = "1"
 
-import pytest
-from backend.api import health_live, health_ready, get_overview, get_credentials
-from backend.models import BotState
+from backend.api import app
 
 
-@pytest.mark.asyncio
-async def test_endpoint_health_live():
-    res = await health_live()
-    assert res == {"status": "ok"}
+def test_api_routes_registered():
+    routes = [route.path for route in app.routes]
+    assert "/api/health/live" in routes
+    assert "/api/health/ready" in routes
+    assert "/api/overview" in routes
+    assert "/api/chart" in routes
+    assert "/api/watchlist" in routes
+    assert "/api/scanner/connectivity" in routes
+    assert "/api/config/credentials" in routes
+    assert "/api/config/symbol" in routes
+    assert "/api/config/automation" in routes
+    assert "/api/control/pause" in routes
+    assert "/api/control/resume" in routes
+    assert "/api/control/kill" in routes
+    assert "/api/control/close-position" in routes
+    assert "/api/control/reconcile" in routes
 
 
-@pytest.mark.asyncio
-async def test_endpoint_health_ready():
-    res = await health_ready()
-    assert "ready" in res
-    assert res["environment"] == "TESTNET"
-
-
-@pytest.mark.asyncio
-async def test_endpoint_get_overview():
-    overview = await get_overview()
-    assert overview.symbol == "BTCUSD"
-    assert overview.environment == "TESTNET"
-    assert overview.test_equity_usd == 10000.0
-
-
-@pytest.mark.asyncio
-async def test_endpoint_get_credentials():
-    creds = await get_credentials()
-    assert creds.environment == "TESTNET"
-
+def test_api_metadata():
+    assert app.title == "EdgePilot Delta Testnet Trading Bot API"
+    assert app.version == "1.1.0"

@@ -55,3 +55,14 @@ def test_atr():
     assert not np.isnan(atr[-1])
     assert pytest.approx(atr[-1], 0.01) == 10.0
 
+
+def test_supertrend():
+    from backend.indicators import calculate_supertrend
+    highs = np.array([10, 12, 14, 13, 15, 16, 17, 16, 18, 19, 20, 21], dtype=float)
+    lows = np.array([8, 9, 11, 10, 12, 13, 14, 13, 15, 16, 17, 18], dtype=float)
+    closes = np.array([9, 11, 13, 12, 14, 15, 16, 15, 17, 18, 19, 20], dtype=float)
+    st, direction, _, _ = calculate_supertrend(highs, lows, closes, period=5, multiplier=2.0)
+    assert not np.isnan(st[-1])
+    assert direction[-1] == 1  # Bullish trend
+
+

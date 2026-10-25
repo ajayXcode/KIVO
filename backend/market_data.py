@@ -60,7 +60,7 @@ class CandleSeries:
                 return True
             return False
 
-    def is_fresh(self, max_delay_seconds: int = 600) -> bool:
+    def is_fresh(self, max_delay_seconds: int = 1200) -> bool:
         if not self.candles:
             return False
         now_ts = int(time.time())
@@ -70,12 +70,80 @@ class CandleSeries:
     def detect_gaps(self) -> bool:
         if len(self.candles) < 2:
             return False
-        recent = self.candles[-5:]
+        recent = self.candles[-10:]
         for i in range(1, len(recent)):
             step = recent[i].timestamp - recent[i - 1].timestamp
             if step != self.resolution_seconds:
                 return True
         return False
+
+    def fill_gaps(self, current_price: Optional[float] = None) -> int:
+        """
+        Detects missing intervals between candles and forward-fills synthetic bars
+        using previous close and zero volume. Also ensures candle freshness up to now.
+        Returns the number of synthetic candles added.
+        """
+        if not self.candles:
+            if current_price is not None and current_price > 0:
+                now_ts = int(time.time())
+                aligned_ts = now_ts - (now_ts % self.resolution_seconds)
+                self.candles.append(Candle(
+                    timestamp=aligned_ts,
+                    open=current_price,
+                    high=current_price,
+                    low=current_price,
+                    close=current_price,
+                    volume=0.0
+                ))
+                return 1
+            return 0
+
+        added = 0
+        # 1. Fill internal timestamp gaps between candles
+        i = 0
+        while i < len(self.candles) - 1 and added < 200:
+            curr_ts = self.candles[i].timestamp
+            next_ts = self.candles[i + 1].timestamp
+            step = next_ts - curr_ts
+            if step > self.resolution_seconds:
+                missing_ts = curr_ts + self.resolution_seconds
+                last_c = self.candles[i].close
+                synthetic = Candle(
+                    timestamp=missing_ts,
+                    open=last_c,
+                    high=last_c,
+                    low=last_c,
+                    close=last_c,
+                    volume=0.0
+                )
+                self.candles.insert(i + 1, synthetic)
+                added += 1
+                if len(self.candles) > self.max_candles:
+                    self.candles.pop(0)
+                    i = max(0, i - 1)
+            i += 1
+
+        # 2. Forward fill up to current time if trailing behind
+        now_ts = int(time.time())
+        latest_ts = self.candles[-1].timestamp
+        last_close = self.candles[-1].close if current_price is None or current_price <= 0 else current_price
+        while (now_ts - latest_ts) >= (self.resolution_seconds * 2) and added < 300:
+            next_ts = latest_ts + self.resolution_seconds
+            synthetic = Candle(
+                timestamp=next_ts,
+                open=last_close,
+                high=last_close,
+                low=last_close,
+                close=last_close,
+                volume=0.0
+            )
+            self.candles.append(synthetic)
+            added += 1
+            if len(self.candles) > self.max_candles:
+                self.candles.pop(0)
+            latest_ts = next_ts
+
+        return added
 
     def to_arrays(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         opens = np.array([c.open for c in self.candles], dtype=float)
@@ -97,9 +165,13 @@ class MarketDataManager:
         self.candles_5m.clear()
         self.candles_15m.clear()
 
-    def ingest_raw_candles(self, raw_5m: Any, raw_15m: Any) -> None:
+    def ingest_raw_candles(self, raw_5m: Any, raw_15m: Any, latest_price: Optional[float] = None) -> None:
         self._ingest_single_series(raw_5m, self.candles_5m)
         self._ingest_single_series(raw_15m, self.candles_15m)
+        # Automatically fill testnet gaps to ensure seamless indicator math
+        self.candles_5m.fill_gaps(latest_price)
+        self.candles_15m.fill_gaps(latest_price)
+
 
     def _ingest_single_series(self, raw: Any, series: CandleSeries) -> None:
         if not raw:
