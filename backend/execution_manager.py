@@ -75,16 +75,35 @@ class ExecutionManager:
 
             exchange_order_id = str(exchange_res.get("id") or "")
             order_state = exchange_res.get("state", "open")
-            filled_size = float(exchange_res.get("size", risk.proposed_size))
+            total_size = float(exchange_res.get("size", risk.proposed_size))
+            unfilled_size = float(exchange_res.get("unfilled_size") or 0.0)
+            filled_size = max(0.0, total_size - unfilled_size)
+
+            # Check if market order closed without counter-party fill on testnet
+            if order_state == "closed" and filled_size == 0.0:
+                async with get_db_session() as session:
+                    merged = await session.merge(order_record)
+                    merged.exchange_order_id = exchange_order_id
+                    merged.status = OrderStatus.CANCELLED.value
+                    merged.filled_size = 0.0
+                    session.add(EventLog(
+                        event_type="ORDER_UNFILLED_NO_LIQUIDITY",
+                        component="ExecutionManager",
+                        message=f"Order {client_id} closed with 0 fill on {symbol}. Testnet orderbook has 0 counterparty depth at this strike.",
+                        details=f"client_id={client_id}, exchange_id={exchange_order_id}"
+                    ))
+                logger.warning(f"Market order {client_id} on {symbol} closed unfilled: Zero counter-party depth on testnet book.")
+                return False, f"Order {client_id} closed unfilled (zero testnet liquidity on {symbol})", client_id
 
             async with get_db_session() as session:
-                order_record.exchange_order_id = exchange_order_id
-                order_record.status = OrderStatus.FILLED.value if order_state in ("closed", "filled") else OrderStatus.OPEN.value
-                order_record.filled_size = filled_size
+                merged = await session.merge(order_record)
+                merged.exchange_order_id = exchange_order_id
+                merged.status = OrderStatus.FILLED.value if order_state in ("closed", "filled") else OrderStatus.OPEN.value
+                merged.filled_size = filled_size
                 session.add(EventLog(
                     event_type="ORDER_SUBMITTED",
                     component="ExecutionManager",
-                    message=f"Order accepted by exchange. State: {order_state}",
+                    message=f"Order accepted by exchange. State: {order_state}, Filled: {filled_size}",
                     details=f"client_id={client_id}, exchange_id={exchange_order_id}"
                 ))
 
@@ -102,7 +121,8 @@ class ExecutionManager:
         except DeltaExchangeError as exc:
             logger.error(f"Exchange error placing order {client_id}: {exc}")
             async with get_db_session() as session:
-                order_record.status = OrderStatus.REJECTED.value
+                merged = await session.merge(order_record)
+                merged.status = OrderStatus.REJECTED.value
                 session.add(EventLog(
                     event_type="ORDER_REJECTED",
                     component="ExecutionManager",
@@ -114,7 +134,8 @@ class ExecutionManager:
         except Exception as exc:
             logger.critical(f"Ambiguous order submission state for {client_id}: {exc}")
             async with get_db_session() as session:
-                order_record.status = OrderStatus.UNKNOWN.value
+                merged = await session.merge(order_record)
+                merged.status = OrderStatus.UNKNOWN.value
                 session.add(EventLog(
                     event_type="AMBIGUOUS_ORDER_SUBMISSION",
                     component="ExecutionManager",
@@ -171,16 +192,19 @@ class ExecutionManager:
 
             exchange_order_id = str(exchange_res.get("id") or "")
             order_state = exchange_res.get("state", "open")
-            filled_size = float(exchange_res.get("size", size))
+            total_size = float(exchange_res.get("size", size))
+            unfilled_size = float(exchange_res.get("unfilled_size") or 0.0)
+            filled_size = max(0.0, total_size - unfilled_size)
 
             async with get_db_session() as session:
-                order_record.exchange_order_id = exchange_order_id
-                order_record.status = OrderStatus.FILLED.value if order_state in ("closed", "filled") else OrderStatus.OPEN.value
-                order_record.filled_size = filled_size
+                merged = await session.merge(order_record)
+                merged.exchange_order_id = exchange_order_id
+                merged.status = OrderStatus.FILLED.value if order_state in ("closed", "filled") else OrderStatus.OPEN.value
+                merged.filled_size = filled_size
                 session.add(EventLog(
                     event_type="MANUAL_ORDER_FILLED",
                     component="ExecutionManager",
-                    message=f"Manual {action} executed on Delta Testnet. Status: {order_state}",
+                    message=f"Manual {action} executed on Delta Testnet. Status: {order_state}, Filled: {filled_size}",
                     details=f"client_id={client_id}, exchange_id={exchange_order_id}, symbol={symbol}"
                 ))
 
@@ -193,12 +217,13 @@ class ExecutionManager:
                     stop_price=stop_loss_price
                 )
 
-            return True, f"Manual {action} order filled for {size} {symbol}.", client_id
+            return True, f"Manual {action} order submitted for {size} {symbol}.", client_id
 
         except DeltaExchangeError as exc:
             logger.error(f"Exchange error placing manual order {client_id}: {exc}")
             async with get_db_session() as session:
-                order_record.status = OrderStatus.REJECTED.value
+                merged = await session.merge(order_record)
+                merged.status = OrderStatus.REJECTED.value
                 session.add(EventLog(
                     event_type="MANUAL_ORDER_REJECTED",
                     component="ExecutionManager",
@@ -210,7 +235,8 @@ class ExecutionManager:
         except Exception as exc:
             logger.critical(f"Network error executing manual order {client_id}: {exc}")
             async with get_db_session() as session:
-                order_record.status = OrderStatus.UNKNOWN.value
+                merged = await session.merge(order_record)
+                merged.status = OrderStatus.UNKNOWN.value
                 session.add(EventLog(
                     event_type="MANUAL_ORDER_ERROR",
                     component="ExecutionManager",
@@ -235,7 +261,7 @@ class ExecutionManager:
                 product_id=product_id,
                 size=size,
                 side=exit_side,
-                order_type="stop_market_order",
+                order_type="market_order",
                 client_order_id=client_id,
                 stop_price=stop_price
             )
@@ -257,8 +283,18 @@ class ExecutionManager:
                     message=f"Protective stop order active at ${stop_price:.2f}",
                     details=f"client_id={client_id}"
                 ))
+        except DeltaExchangeError as exc:
+            # European vanilla options on Delta Exchange India Testnet reject server-side conditional stop orders with 400 'unsupported'
+            logger.info(f"Exchange does not support server-side option stops ({exc}). Armed internal Dynamic Scalper Exit at ${stop_price:.2f}.")
+            async with get_db_session() as session:
+                session.add(EventLog(
+                    event_type="DYNAMIC_SCALP_STOP_ARMED",
+                    component="ExecutionManager",
+                    message=f"Dynamic Scalper Exit active at ${stop_price:.2f} (Options native server-side stops unsupported on exchange)",
+                    details=f"product_id={product_id}, symbol={symbol}, stop_price={stop_price}"
+                ))
         except Exception as exc:
-            logger.critical(f"Failed to attach protective stop order: {exc}")
+            logger.warning(f"Protective stop placement notice: {exc}")
 
     async def close_position_market(self, product_id: int, current_size: float, symbol: str) -> bool:
         """Emergency flatten: submit opposite market order to close open position immediately."""

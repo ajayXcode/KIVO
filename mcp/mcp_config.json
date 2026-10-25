@@ -1,11 +1,13 @@
 {
   "mcpServers": {
     "delta-exchange": {
-      "command": "python",
+      "command": "d:\\KIVO\\.venv\\Scripts\\python.exe",
       "args": [
-        "mcp/delta_mcp_server.py"
+        "-u",
+        "d:\\KIVO\\mcp\\delta_mcp_server.py"
       ],
       "env": {
+        "PYTHONPATH": "d:\\KIVO",
         "DELTA_REST_URL": "https://cdn-ind.testnet.deltaex.org",
         "DELTA_WS_URL": "wss://socket-ind.testnet.deltaex.org",
         "ENVIRONMENT": "TESTNET"

@@ -4,6 +4,13 @@ import logging
 import sys
 import uvicorn
 
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 from backend.config import get_settings
 from backend.security import SensitiveDataRedactor
 
@@ -29,7 +36,6 @@ def setup_logging():
     handler.addFilter(redactor)
 
     root_logger.handlers = [handler]
-    logging.getLogger("uvicorn.access").addFilter(redactor)
 
 
 def start():

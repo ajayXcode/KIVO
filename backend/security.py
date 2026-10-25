@@ -21,15 +21,31 @@ class SensitiveDataRedactor(logging.Filter):
             re.compile(r'(Bearer\s+)[A-Za-z0-9\-\._~\+\/]+=*', re.IGNORECASE),
         ]
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
+    def _scrub(self, text: str) -> str:
         for token in self.patterns:
             if token and len(token) > 4:
-                msg = msg.replace(token, "[REDACTED]")
+                text = text.replace(token, "[REDACTED]")
         for regex in self.regexes:
-            msg = regex.sub(r'\1[REDACTED]', msg)
-        record.msg = msg
-        record.args = ()
+            text = regex.sub(r'\1[REDACTED]', text)
+        return text
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if isinstance(record.msg, str):
+                record.msg = self._scrub(record.msg)
+            if record.args:
+                if isinstance(record.args, tuple):
+                    record.args = tuple(
+                        self._scrub(arg) if isinstance(arg, str) else arg
+                        for arg in record.args
+                    )
+                elif isinstance(record.args, dict):
+                    record.args = {
+                        k: self._scrub(v) if isinstance(v, str) else v
+                        for k, v in record.args.items()
+                    }
+        except Exception:
+            pass
         return True
 
 

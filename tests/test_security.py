@@ -46,3 +46,23 @@ def test_sensitive_data_redactor():
     redactor.filter(record)
     assert secret_key not in record.msg
     assert "[REDACTED]" in record.msg
+
+
+def test_sensitive_data_redactor_preserves_uvicorn_args():
+    redactor = SensitiveDataRedactor(patterns_to_redact=["secret123"])
+    args = ("127.0.0.1", "GET", "/api/watchlist?key=secret123", "1.1", 200)
+    record = logging.LogRecord(
+        name="uvicorn.access",
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=args,
+        exc_info=None
+    )
+    redactor.filter(record)
+    assert len(record.args) == 5
+    assert record.args[0] == "127.0.0.1"
+    assert record.args[4] == 200
+    assert "secret123" not in record.args[2]
+

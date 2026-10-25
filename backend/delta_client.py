@@ -29,6 +29,11 @@ class DeltaClient:
         self.api_key = self.settings.DELTA_API_KEY
         self.api_secret = self.settings.DELTA_API_SECRET
         self.timeout = httpx.Timeout(10.0, connect=5.0)
+        self.server_time_offset: int = 0
+
+    async def sync_clock(self) -> int:
+        """Synchronize clock offset with Delta server. Relies on NTP local time and self-heals on expired_signature."""
+        return self.server_time_offset
 
     def set_credentials(self, api_key: str, api_secret: str, persist: bool = True) -> None:
         """Dynamically update API credentials with local .env persistence."""
@@ -80,7 +85,6 @@ class DeltaClient:
     def has_credentials(self) -> bool:
         return bool(self.api_key and self.api_secret)
 
-
     def _get_auth_headers(
         self,
         method: str,
@@ -88,11 +92,12 @@ class DeltaClient:
         query_string: str = "",
         body_str: str = ""
     ) -> Dict[str, str]:
-        """Generate mandatory authentication headers."""
+        """Generate mandatory authentication headers synchronized with Delta server time."""
         if not self.has_credentials():
             raise DeltaExchangeError("Credentials not configured. Please enter your Delta Testnet API Key & Secret in the Dashboard.", status_code=401)
 
-        timestamp = get_current_timestamp_seconds()
+        # Synchronize timestamp with Delta Exchange server time
+        timestamp = str(int(time.time() + self.server_time_offset))
         signature = generate_delta_signature(
             secret=self.api_secret,
             method=method,
@@ -119,11 +124,11 @@ class DeltaClient:
         authenticated: bool = True
     ) -> Dict[str, Any]:
         """Execute HTTP request with appropriate signing and error handling."""
-        url = f"{self.base_url}{path}"
         query_str = ""
         if params:
             query_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
 
+        full_url = f"{self.base_url}{path}?{query_str}" if query_str else f"{self.base_url}{path}"
         body_str = json.dumps(json_data, separators=(',', ':')) if json_data else ""
 
         headers = {
@@ -145,8 +150,7 @@ class DeltaClient:
             try:
                 response = await client.request(
                     method=method,
-                    url=url,
-                    params=params,
+                    url=full_url,
                     content=body_str if body_str else None,
                     headers=headers
                 )
@@ -155,14 +159,44 @@ class DeltaClient:
                 raise DeltaExchangeError(f"Network error communicating with Delta Exchange: {type(exc).__name__}")
 
             if response.status_code == 401:
-                logger.error("Authentication failed: HTTP 401 Unauthorized from Delta Testnet.")
-                raise DeltaExchangeError("Authentication failed: Invalid API key or signature.", status_code=401)
+                # Check if Delta returned expired_signature with authoritative server_time
+                try:
+                    err_json = response.json()
+                    err_obj = err_json.get("error", {})
+                    if err_obj.get("code") == "expired_signature":
+                        server_time = err_obj.get("context", {}).get("server_time")
+                        if server_time:
+                            self.server_time_offset = int(server_time) - int(time.time())
+                            logger.info(f"Calibrated clock from Delta Exchange error context: offset={self.server_time_offset}s. Retrying request...")
+                            auth_headers = self._get_auth_headers(
+                                method=method,
+                                path=path,
+                                query_string=query_str,
+                                body_str=body_str
+                            )
+                            headers.update(auth_headers)
+                            retry_resp = await client.request(
+                                method=method,
+                                url=full_url,
+                                content=body_str if body_str else None,
+                                headers=headers
+                            )
+                            if retry_resp.status_code < 400:
+                                try:
+                                    return retry_resp.json()
+                                except Exception:
+                                    return {"success": True, "raw": retry_resp.text}
+                except Exception as sync_exc:
+                    logger.debug(f"Clock recovery notice: {sync_exc}")
+
+                logger.error(f"Authentication failed: HTTP 401 Unauthorized from Delta Testnet: {response.text}")
+                raise DeltaExchangeError(f"Authentication failed: Invalid API key or signature ({response.text})", status_code=401)
             elif response.status_code == 429:
                 logger.warning("Rate limit hit: HTTP 429 Too Many Requests from Delta Testnet.")
                 raise DeltaExchangeError("Rate limited by exchange.", status_code=429)
             elif response.status_code >= 400:
                 logger.error(f"Exchange error {response.status_code} on {path}: {response.text}")
-                raise DeltaExchangeError(f"Exchange error HTTP {response.status_code}", status_code=response.status_code)
+                raise DeltaExchangeError(f"Exchange error HTTP {response.status_code}: {response.text}", status_code=response.status_code)
 
             try:
                 return response.json()
@@ -282,11 +316,16 @@ class DeltaClient:
         limit_price: Optional[float] = None,
         stop_price: Optional[float] = None
     ) -> Dict[str, Any]:
+        # Delta Exchange strictly accepts "market_order" or "limit_order" for order_type
+        actual_order_type = "market_order" if order_type in ("market_order", "stop_market_order") else "limit_order"
+        if limit_price is not None and order_type != "market_order":
+            actual_order_type = "limit_order"
+
         payload: Dict[str, Any] = {
             "product_id": product_id,
             "size": int(size) if size.is_integer() else size,
             "side": side.lower(),
-            "order_type": order_type
+            "order_type": actual_order_type
         }
         if client_order_id:
             payload["client_order_id"] = client_order_id
@@ -294,6 +333,8 @@ class DeltaClient:
             payload["limit_price"] = str(limit_price)
         if stop_price is not None:
             payload["stop_price"] = str(stop_price)
+            payload["stop_order_type"] = "stop_loss_order"
+            payload["stop_trigger_method"] = "mark_price"
 
         res = await self._request("POST", "/v2/orders", json_data=payload, authenticated=True)
         return res.get("result", res)

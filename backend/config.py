@@ -72,12 +72,12 @@ class Settings(BaseSettings):
     DAILY_LOSS_LIMIT_PCT: float = Field(default=0.015)
     MAX_OPEN_POSITIONS: int = Field(default=1)
     MAX_SPREAD_TICKS: int = Field(default=10)
-    COOLDOWN_SECONDS: int = Field(default=300)
+    COOLDOWN_SECONDS: int = Field(default=15, description="Scalper trade cooldown in seconds")
     SLIPPAGE_TOLERANCE_PCT: float = Field(default=0.001)
 
     # Automation Mode (AUTO_PILOT vs MANUAL)
     AUTOMATION_ENABLED: bool = Field(default=False)
-    SCAN_INTERVAL_SECONDS: int = Field(default=5)
+    SCAN_INTERVAL_SECONDS: int = Field(default=2, description="Fast execution scan loop interval in seconds")
 
     # Runtime & Safety
     HOST: str = Field(default="0.0.0.0")

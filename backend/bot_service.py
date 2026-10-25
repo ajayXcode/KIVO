@@ -78,8 +78,12 @@ class BotService:
         """Dynamically update API credentials from frontend UI."""
         self.client.set_credentials(api_key, api_secret)
         logger.info(f"API credentials updated via frontend. Key: {mask_credential(api_key)}")
+        async def _sync_and_load():
+            await self.client.sync_clock()
+            await self.fetch_profile_and_balances()
+            await self.reconciler.reconcile(self.settings.PRODUCT_ID, self.settings.SYMBOL)
         try:
-            asyncio.create_task(self.fetch_profile_and_balances())
+            asyncio.create_task(_sync_and_load())
         except Exception:
             pass
 
@@ -144,7 +148,10 @@ class BotService:
 
     def set_automation_mode(self, enabled: bool) -> None:
         self.automation_mode = AutomationMode.AUTO_PILOT if enabled else AutomationMode.MANUAL
-        logger.info(f"Automation mode set to: {self.automation_mode.value}")
+        if enabled:
+            if self.state_machine.current_state in (BotState.READY, BotState.PAUSED):
+                self.state_machine.transition(BotState.RUNNING, "Auto-Pilot activated by operator")
+        logger.info(f"Automation mode set to: {self.automation_mode.value}, State: {self.state_machine.current_state.value}")
 
     async def switch_underlying_asset(self, asset: str) -> bool:
         """Switch underlying asset between BTC, ETH, and XAUT."""
@@ -359,20 +366,25 @@ class BotService:
                 "email": self.user_email,
                 "account_id": self.user_account_id,
                 "country": profile.get("country"),
-                "is_kyc_approved": bool(profile.get("is_kyc_approved", False)),
+                "is_kyc_approved": bool(
+                    profile.get("is_kyc_approved")
+                    or profile.get("is_kyc_done")
+                    or profile.get("proof_of_identity_status") == "approved"
+                ),
                 "profile": profile,
                 "balances": balances,
                 "total_balance_usd": self.live_wallet_usd
             }
         except Exception as exc:
-            logger.debug(f"Unable to fetch profile/balances: {exc}")
+            logger.error(f"Error fetching Delta profile and wallet balances: {exc}")
             return {
                 "configured": True,
                 "email": self.user_email,
                 "account_id": self.user_account_id,
                 "profile": self.cached_profile,
-                "balances": self.cached_balances,
-                "total_balance_usd": self.live_wallet_usd
+                "balances": self.cached_balances or [],
+                "total_balance_usd": self.live_wallet_usd,
+                "error": str(exc)
             }
 
     async def execute_manual_option_buy(
@@ -451,6 +463,7 @@ class BotService:
         logger.info("Initializing EdgePilot Option Buying Bot...")
         self.state_machine.transition(BotState.INITIALIZING, "Running startup gates")
         await init_db()
+        await self.client.sync_clock()
 
         try:
             product = await self.client.get_product_by_symbol(self.settings.SYMBOL)
@@ -562,28 +575,104 @@ class BotService:
                             reason=self.latest_signal.reason
                         ))
 
-                # If RUNNING and AUTO_PILOT is enabled, execute confirmed option order
-                if self.state_machine.current_state == BotState.RUNNING and self.automation_mode == AutomationMode.AUTO_PILOT:
-                    if self.latest_signal and self.latest_signal.action in (SignalAction.BUY_CALL, SignalAction.BUY_PUT, SignalAction.LONG, SignalAction.SHORT):
-                        risk_eval = self.risk_manager.evaluate_intent(
-                            signal=self.latest_signal,
-                            current_position_size=self.current_position_size
-                        )
-                        if risk_eval.approved:
-                            target_prod_id = self.current_atm_option.product_id if self.current_atm_option else self.settings.PRODUCT_ID
-                            target_sym = self.current_atm_option.symbol if self.current_atm_option else self.settings.SYMBOL
-                            logger.info(f"Auto-Pilot: Submitting approved {self.latest_signal.action.value} order on {target_sym}...")
-                            success, msg, client_id = await self.execution.execute_trade_intent(
-                                action=self.latest_signal.action,
-                                risk=risk_eval,
-                                product_id=target_prod_id,
-                                symbol=target_sym
+                # If Auto-Pilot is enabled and bot was READY, auto-promote to RUNNING
+                if self.automation_mode == AutomationMode.AUTO_PILOT and self.state_machine.current_state == BotState.READY:
+                    if not self.risk_manager.circuit_breaker_active:
+                        self.state_machine.transition(BotState.RUNNING, "Auto-Pilot active: transitioning READY to RUNNING")
+
+                # ==============================================================
+                # 1. ACTIVE POSITION SCALPER: SITUATION-BASED DYNAMIC EXITS
+                # ==============================================================
+                if abs(self.current_position_size) > 0 and self.automation_mode == AutomationMode.AUTO_PILOT:
+                    reversal_exit = False
+                    exit_reason = ""
+                    target_sym = self.current_atm_option.symbol if self.current_atm_option else self.settings.SYMBOL
+                    is_option = target_sym.startswith(("C-", "P-"))
+
+                    if is_option:
+                        is_put = target_sym.startswith("P-") or (self.current_atm_option and self.current_atm_option.option_type == "PUT")
+                        q_price = self.current_atm_option.quote_price if self.current_atm_option else 0.0
+
+                        if is_put:
+                            # We hold a Bearish Put: exit if market reverses to Bullish
+                            if self.latest_signal and self.latest_signal.action in (SignalAction.BUY_CALL, SignalAction.LONG):
+                                reversal_exit = True
+                                exit_reason = f"SCALP_REVERSAL: Trend reversed to {self.latest_signal.action.value}. Fast exit Put."
+                            elif self.latest_signal and self.latest_signal.indicators.supertrend_direction == 1:
+                                reversal_exit = True
+                                exit_reason = "SCALP_TREND_BREAK: Supertrend flipped BULLISH (+1). Fast exit Put."
+                        else:
+                            # We hold a Bullish Call: exit if market reverses to Bearish
+                            if self.latest_signal and self.latest_signal.action in (SignalAction.BUY_PUT, SignalAction.SHORT):
+                                reversal_exit = True
+                                exit_reason = f"SCALP_REVERSAL: Trend reversed to {self.latest_signal.action.value}. Fast exit Call."
+                            elif self.latest_signal and self.latest_signal.indicators.supertrend_direction == -1:
+                                reversal_exit = True
+                                exit_reason = "SCALP_TREND_BREAK: Supertrend flipped BEARISH (-1). Fast exit Call."
+
+                        # Option-specific ATR Target & Stop-Loss Exits
+                        if self.current_atm_option and q_price > 0:
+                            if self.current_atm_option.take_profit_price > 0 and q_price >= self.current_atm_option.take_profit_price:
+                                reversal_exit = True
+                                exit_reason = f"SCALP_TP_HIT: Option price (${q_price}) reached Target (${self.current_atm_option.take_profit_price})."
+                            elif self.current_atm_option.stop_loss_price > 0 and q_price <= self.current_atm_option.stop_loss_price:
+                                reversal_exit = True
+                                exit_reason = f"SCALP_SL_HIT: Option price (${q_price}) hit Stop-Loss (${self.current_atm_option.stop_loss_price})."
+
+                    else:
+                        # Standard Perpetual Futures (BTCUSD)
+                        if self.current_position_size > 0:
+                            if self.latest_signal and self.latest_signal.action in (SignalAction.BUY_PUT, SignalAction.SHORT):
+                                reversal_exit = True
+                                exit_reason = f"SCALP_REVERSAL: Signal flipped to {self.latest_signal.action.value}. Fast exit."
+                            elif self.latest_signal and self.latest_signal.indicators.supertrend_direction == -1:
+                                reversal_exit = True
+                                exit_reason = "SCALP_TREND_BREAK: Supertrend flipped BEARISH. Fast exit."
+                        elif self.current_position_size < 0:
+                            if self.latest_signal and self.latest_signal.action in (SignalAction.BUY_CALL, SignalAction.LONG):
+                                reversal_exit = True
+                                exit_reason = f"SCALP_REVERSAL: Signal flipped to {self.latest_signal.action.value}. Fast exit."
+                            elif self.latest_signal and self.latest_signal.indicators.supertrend_direction == 1:
+                                reversal_exit = True
+                                exit_reason = "SCALP_TREND_BREAK: Supertrend flipped BULLISH. Fast exit."
+
+                    if reversal_exit:
+                        logger.info(f"Auto-Pilot Situation Exit Triggered: {exit_reason}")
+                        await self.flatten_position(reason=exit_reason)
+                        target_prod_id = self.current_atm_option.product_id if self.current_atm_option else self.settings.PRODUCT_ID
+                        target_sym = self.current_atm_option.symbol if self.current_atm_option else self.settings.SYMBOL
+                        _, self.current_position_size, self.unrealized_pnl = await self.reconciler.reconcile(target_prod_id, target_sym)
+
+                # ==============================================================
+                # 2. AUTONOMOUS SCALPING ENTRY ENGINE
+                # ==============================================================
+                is_active_execution = (
+                    self.state_machine.current_state in (BotState.RUNNING, BotState.READY)
+                    and self.automation_mode == AutomationMode.AUTO_PILOT
+                )
+                if is_active_execution and abs(self.current_position_size) == 0.0:
+                    if self.client.has_credentials():
+                        if self.latest_signal and self.latest_signal.action in (SignalAction.BUY_CALL, SignalAction.BUY_PUT, SignalAction.LONG, SignalAction.SHORT):
+                            risk_eval = self.risk_manager.evaluate_intent(
+                                signal=self.latest_signal,
+                                current_position_size=self.current_position_size
                             )
-                            if success:
-                                _, self.current_position_size, self.unrealized_pnl = await self.reconciler.reconcile(
-                                    target_prod_id,
-                                    target_sym
+                            if risk_eval.approved:
+                                target_prod_id = self.current_atm_option.product_id if self.current_atm_option else self.settings.PRODUCT_ID
+                                target_sym = self.current_atm_option.symbol if self.current_atm_option else self.settings.SYMBOL
+                                logger.info(f"Auto-Pilot Scalper: Executing {self.latest_signal.action.value} on {target_sym}...")
+                                success, msg, client_id = await self.execution.execute_trade_intent(
+                                    action=self.latest_signal.action,
+                                    risk=risk_eval,
+                                    product_id=target_prod_id,
+                                    symbol=target_sym
                                 )
+                                if success:
+                                    _, self.current_position_size, self.unrealized_pnl = await self.reconciler.reconcile(
+                                        target_prod_id,
+                                        target_sym
+                                    )
+                                    await self.fetch_profile_and_balances()
 
                 reconcile_counter += 1
                 if reconcile_counter >= 6:
@@ -618,19 +707,22 @@ class BotService:
 
         # Human-readable real-time auto-pilot explanation
         if self.risk_manager.circuit_breaker_active:
-            auto_detail = "🚨 Daily Loss Circuit Breaker Active. Trading halted."
+            auto_detail = "[CIRCUIT BREAKER] Daily Loss Limit Reached. Trading halted."
         elif self.state_machine.current_state == BotState.PAUSED:
-            auto_detail = "⏸️ Operator Paused: Auto-Pilot waiting for resume."
+            auto_detail = "[PAUSED] Operator Paused: Auto-Pilot waiting for resume."
         elif self.state_machine.current_state == BotState.HALTED:
-            auto_detail = "🛑 Emergency Halt Active. All orders cancelled."
+            auto_detail = "[HALTED] Emergency Halt Active. All orders cancelled."
         elif self.automation_mode == AutomationMode.MANUAL:
-            auto_detail = f"🖐️ Manual Standby Mode. Monitoring {self.settings.UNDERLYING_ASSET}. Use Instant Buy buttons or toggle Auto-Pilot ON."
-        elif self.state_machine.current_state == BotState.RUNNING and self.automation_mode == AutomationMode.AUTO_PILOT:
-            st_text = self.latest_signal.indicators.supertrend_label if self.latest_signal and self.latest_signal.indicators else "NEUTRAL"
-            opt_sym = self.current_atm_option.symbol if self.current_atm_option else "Scanning"
-            auto_detail = f"🤖 Auto-Pilot ACTIVE: Monitoring {self.settings.SYMBOL} (Spot: ${self.latest_price:,.1f} | ST: {st_text} | ATM: {opt_sym}). Orders execute on signal."
+            auto_detail = f"[MANUAL STANDBY] Monitoring {self.settings.UNDERLYING_ASSET}. Use Instant Buy buttons or toggle Auto-Pilot ON."
+        elif self.automation_mode == AutomationMode.AUTO_PILOT:
+            if not self.client.has_credentials():
+                auto_detail = f"[AUTO-PILOT ARMED: AWAITING KEYS] Auto-Pilot enabled for {self.settings.SYMBOL}. Click 'Setup API Keys' above to start automated execution."
+            else:
+                st_text = self.latest_signal.indicators.supertrend_label if self.latest_signal and self.latest_signal.indicators else "NEUTRAL"
+                opt_sym = self.current_atm_option.symbol if self.current_atm_option else "Scanning"
+                auto_detail = f"[⚡ AUTO-PILOT ACTIVE] Live Scalping {self.settings.SYMBOL} (${self.latest_price:,.1f} | ST: {st_text} | Target: {opt_sym}). Autonomous entry & exit active."
         else:
-            auto_detail = f"⚙️ Bot State: {self.state_machine.current_state.value}. Standby."
+            auto_detail = f"[READY] Bot State: {self.state_machine.current_state.value}. Standby."
 
         return BotStatusResponse(
             state=self.state_machine.current_state,

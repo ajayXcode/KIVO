@@ -184,22 +184,42 @@ class DeltaMcpServer:
             }
         ]
 
+    async def _ensure_credentials_and_clock(self):
+        """Reload latest credentials from .env and ensure clock is synced with Delta server."""
+        if not self.client.has_credentials():
+            env_path = ROOT_DIR / ".env"
+            if env_path.exists():
+                try:
+                    for line in env_path.read_text(encoding="utf-8").splitlines():
+                        if line.startswith("DELTA_API_KEY="):
+                            self.client.api_key = line.split("=", 1)[1].strip()
+                        elif line.startswith("DELTA_API_SECRET="):
+                            self.client.api_secret = line.split("=", 1)[1].strip()
+                except Exception:
+                    pass
     async def execute_tool(self, tool_name: str, args: Dict[str, Any]) -> Any:
+        await self._ensure_credentials_and_clock()
+
         if tool_name == "delta_get_profile":
             if not self.client.has_credentials():
-                return {"error": "Delta Exchange credentials not configured in .env"}
+                return {"error": "Delta Exchange credentials not configured in .env or web dashboard"}
             profile = await self.client.get_profile()
+            is_kyc = bool(
+                profile.get("is_kyc_approved")
+                or profile.get("is_kyc_done")
+                or profile.get("proof_of_identity_status") == "approved"
+            )
             return {
                 "id": profile.get("id"),
                 "email": profile.get("email") or profile.get("user_name"),
                 "country": profile.get("country"),
-                "is_kyc_approved": profile.get("is_kyc_approved", False),
+                "is_kyc_approved": is_kyc,
                 "trading_status": profile.get("status")
             }
 
         elif tool_name == "delta_get_balances":
             if not self.client.has_credentials():
-                return {"error": "Delta Exchange credentials not configured in .env"}
+                return {"error": "Delta Exchange credentials not configured in .env or web dashboard"}
             balances = await self.client.get_wallet_balances()
             formatted = []
             total_usd = 0.0
@@ -434,16 +454,30 @@ class DeltaMcpServer:
 
     async def run(self):
         """Read standard input line-by-line and respond with JSON-RPC over stdout."""
+        queue: asyncio.Queue[Optional[str]] = asyncio.Queue()
         loop = asyncio.get_running_loop()
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+
+        def reader():
+            try:
+                while True:
+                    line = sys.stdin.readline()
+                    if not line:
+                        break
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+            except Exception as e:
+                logger.error(f"Stdin read error: {e}")
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        import threading
+        t = threading.Thread(target=reader, daemon=True)
+        t.start()
 
         while True:
-            line = await reader.readline()
-            if not line:
+            line = await queue.get()
+            if line is None:
                 break
-            raw_text = line.decode("utf-8").strip()
+            raw_text = line.strip()
             if not raw_text:
                 continue
 

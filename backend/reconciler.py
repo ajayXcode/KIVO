@@ -33,9 +33,27 @@ class Reconciler:
 
             matched_pos = None
             for p in positions:
-                if isinstance(p, dict) and (p.get("product_id") == product_id or p.get("product_symbol") == symbol):
-                    matched_pos = p
-                    break
+                if isinstance(p, dict):
+                    pid = p.get("product_id")
+                    psym = p.get("product_symbol") or p.get("symbol") or ""
+                    if (pid is not None and str(pid) == str(product_id)) or psym == symbol:
+                        matched_pos = p
+                        break
+
+            # If not found via direct product filter, query all active positions as fallback
+            if not matched_pos:
+                try:
+                    all_raw = await self.client.get_positions()
+                    all_positions = [all_raw] if isinstance(all_raw, dict) else all_raw if isinstance(all_raw, list) else []
+                    for p in all_positions:
+                        if isinstance(p, dict):
+                            pid = p.get("product_id")
+                            psym = p.get("product_symbol") or p.get("symbol") or ""
+                            if (pid is not None and str(pid) == str(product_id)) or psym == symbol:
+                                matched_pos = p
+                                break
+                except Exception:
+                    pass
 
             exchange_size = 0.0
             entry_price = 0.0
