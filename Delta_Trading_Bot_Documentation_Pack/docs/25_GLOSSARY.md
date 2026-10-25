@@ -1,0 +1,23 @@
+# 25 — Glossary
+
+- **Testnet/Demo:** exchange testing environment; not equivalent to mainnet liquidity or return results.
+- **REST:** request/response interface for queries and commands.
+- **WebSocket (WS):** persistent connection for streaming updates.
+- **EMA:** exponential moving average.
+- **RSI:** relative strength index.
+- **ADX:** average directional index, a trend-strength indicator.
+- **Closed candle:** a completed OHLCV time interval.
+- **LONG / SHORT:** strategy direction candidates; not an order until risk-approved.
+- **NO TRADE:** no candidate or a blocked trade, with reason codes.
+- **Risk gate:** server-side component that approves/rejects candidate entries.
+- **Protective exit:** accepted exchange order or verified mechanism intended to reduce/close exposure.
+- **Idempotency:** repeated request does not cause an unintended repeated effect; must be verified in the API contract.
+- **Reconciliation:** comparison of local order/fill/position view with authoritative exchange state.
+- **Ambiguous order:** submit outcome is unknown due to timeout/disconnect; reconcile before retry.
+- **Drawdown:** peak-to-trough decline in a specified equity/P&L curve.
+- **Replay:** reprocessing recorded data; resulting fills are simulated.
+- **Fixture:** deterministic test/demo data.
+- **Fail closed:** deny new action when required information or safety checks are unavailable.
+- **ADR:** Architecture Decision Record documenting a significant design choice and its consequences.
+- **Liveness:** process is responding.
+- **Readiness:** system has passed required checks to operate safely.

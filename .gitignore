@@ -1,0 +1,52 @@
+# Credentials and secrets
+.env
+.env*.local
+*.pem
+*.key
+
+# Python virtual environment & cache
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd.disabled
+*.so
+.Python
+
+# SQLite, databases and runtime logs
+*.db
+*.sqlite
+*.sqlite3
+*.log
+logs/
+
+# Node & Frontend dependencies/cache
+node_modules/
+dashboard/node_modules/
+.vite/
+dashboard/.vite/
+
+# Pytest & test cache
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# IDE & OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Archives & temporary artifacts
+*.zip
+*.tar.gz
+*.bak
+*.tmp
+
