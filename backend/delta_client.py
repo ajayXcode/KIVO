@@ -30,22 +30,56 @@ class DeltaClient:
         self.api_secret = self.settings.DELTA_API_SECRET
         self.timeout = httpx.Timeout(10.0, connect=5.0)
 
-    def set_credentials(self, api_key: str, api_secret: str) -> None:
-        """Dynamically update API credentials from frontend session."""
+    def set_credentials(self, api_key: str, api_secret: str, persist: bool = True) -> None:
+        """Dynamically update API credentials with local .env persistence."""
         self.api_key = api_key.strip()
         self.api_secret = api_secret.strip()
         self.settings.DELTA_API_KEY = self.api_key
         self.settings.DELTA_API_SECRET = self.api_secret
 
+        if persist and self.api_key and self.api_secret:
+            try:
+                from pathlib import Path
+                import re
+                env_path = Path(__file__).resolve().parent.parent / ".env"
+                content = env_path.read_text(encoding="utf-8") if env_path.exists() else ""
+                
+                if re.search(r"^DELTA_API_KEY=.*$", content, re.MULTILINE):
+                    content = re.sub(r"^DELTA_API_KEY=.*$", f"DELTA_API_KEY={self.api_key}", content, flags=re.MULTILINE)
+                else:
+                    content += f"\nDELTA_API_KEY={self.api_key}"
+                
+                if re.search(r"^DELTA_API_SECRET=.*$", content, re.MULTILINE):
+                    content = re.sub(r"^DELTA_API_SECRET=.*$", f"DELTA_API_SECRET={self.api_secret}", content, flags=re.MULTILINE)
+                else:
+                    content += f"\nDELTA_API_SECRET={self.api_secret}"
+                
+                env_path.write_text(content.strip() + "\n", encoding="utf-8")
+                logger.info("Persisted API credentials to local .env.")
+            except Exception as e:
+                logger.warning(f"Notice: Could not write credentials to .env: {e}")
+
     def clear_credentials(self) -> None:
-        """Clear active session credentials."""
+        """Clear active session credentials and wipe from .env."""
         self.api_key = ""
         self.api_secret = ""
         self.settings.DELTA_API_KEY = ""
         self.settings.DELTA_API_SECRET = ""
+        try:
+            from pathlib import Path
+            import re
+            env_path = Path(__file__).resolve().parent.parent / ".env"
+            if env_path.exists():
+                content = env_path.read_text(encoding="utf-8")
+                content = re.sub(r"^DELTA_API_KEY=.*$", "DELTA_API_KEY=", content, flags=re.MULTILINE)
+                content = re.sub(r"^DELTA_API_SECRET=.*$", "DELTA_API_SECRET=", content, flags=re.MULTILINE)
+                env_path.write_text(content.strip() + "\n", encoding="utf-8")
+        except Exception:
+            pass
 
     def has_credentials(self) -> bool:
         return bool(self.api_key and self.api_secret)
+
 
     def _get_auth_headers(
         self,
@@ -211,8 +245,19 @@ class DeltaClient:
             return res.get("result", [])
 
     # Authenticated Private Endpoints
+    async def get_profile(self) -> Dict[str, Any]:
+        """Fetch user profile and account details from Delta Exchange."""
+        res = await self._request("GET", "/v2/profile", authenticated=True)
+        return res.get("result", res)
+
+    async def get_wallet_balances(self) -> List[Dict[str, Any]]:
+        """Fetch authenticated user wallet balances (USDT, USD, Cash, Equity)."""
+        res = await self._request("GET", "/v2/wallet/balances", authenticated=True)
+        return res.get("result", [])
+
     async def get_positions(self, product_id: Optional[int] = None) -> List[Dict[str, Any]]:
         params: Dict[str, Any] = {}
+
         if product_id:
             params["product_id"] = product_id
         else:

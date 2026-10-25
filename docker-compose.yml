@@ -1,0 +1,39 @@
+version: "3.8"
+
+services:
+  kivo-trading-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kivo-trading-bot
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ENVIRONMENT=TESTNET
+      - DELTA_REST_URL=https://cdn-ind.testnet.deltaex.org
+      - DELTA_WS_URL=wss://socket-ind.testnet.deltaex.org
+      - UNDERLYING_ASSET=BTC
+      - TIMEFRAME=5m
+      - CONTRACTS_COUNT=1
+      - SUPERTREND_PERIOD=10
+      - SUPERTREND_MULT=3.0
+      - EMA_PERIOD=20
+      - OPTION_ATR_PERIOD=14
+      - SL_ATR_MULT=1.5
+      - TP_ATR_MULT=2.5
+      - AUTOMATION_ENABLED=false
+    volumes:
+      - bot-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/api/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  bot-data:
+    driver: local

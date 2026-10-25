@@ -159,6 +159,10 @@ class IndicatorSnapshot(BaseModel):
     supertrend_direction: int = 0
     supertrend_label: str = "NEUTRAL"
     option_atr: float = 0.0
+    ewo: float = 0.0
+    roc15m: float = 0.0
+    setup_type: str = "WAITING"
+    confidence_pct: int = 0
     trend_bullish: bool
     warmup_complete: bool
 
@@ -207,6 +211,9 @@ class BotStatusResponse(BaseModel):
     credentials_configured: bool = False
     masked_api_key: str = "Not Configured"
     last_reconciliation_time: Optional[datetime] = None
+    live_balance_usd: float = 0.0
+    user_email: Optional[str] = None
+    auto_pilot_status_detail: str = ""
 
 
 
@@ -266,5 +273,34 @@ class SessionResetResponse(BaseModel):
     positions_closed: int = 0
     orders_cancelled: int = 0
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class UserProfileResponse(BaseModel):
+    configured: bool
+    email: Optional[str] = None
+    account_id: Optional[str] = None
+    country: Optional[str] = None
+    is_kyc_approved: bool = False
+    profile: Optional[Dict[str, Any]] = None
+    balances: List[Dict[str, Any]] = []
+    total_balance_usd: float = 0.0
+
+
+class QuickOrderPayload(BaseModel):
+    action: str = Field(..., description="BUY_CALL or BUY_PUT")
+    symbol: Optional[str] = None
+    product_id: Optional[int] = None
+    contracts: Optional[int] = 1
+    with_protection: bool = True
+
+
+class QuickOrderResponse(BaseModel):
+    success: bool
+    message: str
+    client_order_id: Optional[str] = None
+    symbol: Optional[str] = None
+    product_id: Optional[int] = None
+    action: str = ""
+    size: float = 0.0
 
 

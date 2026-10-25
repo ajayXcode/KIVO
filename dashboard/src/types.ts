@@ -43,6 +43,10 @@ export interface IndicatorSnapshot {
   supertrend_direction?: number;
   supertrend_label?: string;
   option_atr?: number;
+  ewo?: number;
+  roc15m?: number;
+  setup_type?: string;
+  confidence_pct?: number;
   trend_bullish: boolean;
   warmup_complete: boolean;
 }
@@ -81,6 +85,9 @@ export interface BotStatus {
   credentials_configured: boolean;
   masked_api_key: string;
   last_reconciliation_time?: string;
+  live_balance_usd?: number;
+  user_email?: string;
+  auto_pilot_status_detail?: string;
 }
 
 export interface WatchlistItem {
@@ -172,4 +179,39 @@ export interface SessionResetResponse {
   positions_closed: number;
   orders_cancelled: number;
   timestamp: string;
+}
+
+export interface UserProfileResponse {
+  configured: boolean;
+  email?: string;
+  account_id?: string;
+  country?: string;
+  is_kyc_approved: boolean;
+  profile?: Record<string, any>;
+  balances: Array<{
+    asset_symbol: string;
+    asset_id?: number;
+    balance: string | number;
+    available_balance: string | number;
+    cash_balance?: string | number;
+  }>;
+  total_balance_usd: number;
+}
+
+export interface QuickOrderPayload {
+  action: 'BUY_CALL' | 'BUY_PUT';
+  symbol?: string;
+  product_id?: number;
+  contracts?: number;
+  with_protection?: boolean;
+}
+
+export interface QuickOrderResponse {
+  success: boolean;
+  message: string;
+  client_order_id?: string;
+  symbol?: string;
+  product_id?: number;
+  action: string;
+  size: number;
 }

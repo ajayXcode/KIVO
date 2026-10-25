@@ -6,7 +6,10 @@ import {
   WatchlistItem,
   ApiScannerResult,
   CredentialsStatus,
-  ChartCandle
+  ChartCandle,
+  UserProfileResponse,
+  QuickOrderPayload,
+  QuickOrderResponse
 } from './types';
 
 const BASE_URL = '/api';
@@ -176,6 +179,26 @@ export async function clearSession(): Promise<any> {
     headers: { 'Content-Type': 'application/json' },
   });
   if (!res.ok) throw new Error('Failed to clear session');
+  return res.json();
+}
+
+export async function fetchProfile(): Promise<UserProfileResponse> {
+  const res = await fetch(`${BASE_URL}/profile`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function buyOption(payload: QuickOrderPayload): Promise<QuickOrderResponse> {
+  const res = await fetch(`${BASE_URL}/control/buy-option`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Option order failed');
+  }
+  playTradeChime();
   return res.json();
 }
 

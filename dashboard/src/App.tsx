@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Bot, ShieldCheck, Wallet } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { BotStatusBanner } from './components/BotStatusBanner';
 import { TerminalChart } from './components/TerminalChart';
@@ -95,12 +96,48 @@ export function App() {
         {/* Top HUD KPI Ribbon */}
         <BotStatusBanner status={status} />
 
+        {/* Live Auto-Pilot Activity & Delta Account Strip */}
+        <div className="graphite-panel p-3 rounded-xl border border-violet-500/20 bg-[#100d1e]/90 flex flex-col md:flex-row items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center space-x-2.5 w-full md:w-auto">
+            <div className="p-2 rounded-lg bg-violet-600/20 text-violet-300 border border-violet-500/30">
+              <Bot className="w-4 h-4 animate-bounce" />
+            </div>
+            <div>
+              <div className="text-[10px] font-mono uppercase text-violet-400 font-bold tracking-wider flex items-center space-x-1.5">
+                <span>AUTO-PILOT STRATEGY STATUS</span>
+                <span className="text-[9px] bg-violet-900/40 text-violet-300 px-1.5 py-0.2 rounded border border-violet-700/40">
+                  {status?.automation_mode === 'AUTO_PILOT' ? 'AUTONOMOUS' : 'MANUAL APPROVALS'}
+                </span>
+              </div>
+              <p className="text-xs font-mono font-medium text-slate-200">
+                {status?.auto_pilot_status_detail || 'Monitoring market indicators & Delta Testnet options chain...'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center space-x-3 w-full md:w-auto justify-end text-xs font-mono">
+            {status?.user_email && (
+              <div className="flex items-center space-x-1 px-2.5 py-1 rounded bg-[#171329] border border-violet-500/20 text-slate-300">
+                <span className="text-slate-500">Account:</span>
+                <span className="text-violet-300 font-semibold">{status.user_email}</span>
+              </div>
+            )}
+            <div className="flex items-center space-x-1.5 px-3 py-1 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 font-bold">
+              <Wallet className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-slate-400 font-normal">Delta Live Wallet:</span>
+              <span>
+                ${(status?.live_balance_usd ?? status?.test_equity_usd ?? 10000).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT
+              </span>
+            </div>
+          </div>
+        </div>
+
         {/* Pro Trading Grid Split */}
         <div className="flex flex-col lg:flex-row gap-4">
           {/* Left Column: Option Configuration, ATM Option Quote & Tactical Bridge */}
           <div className="w-full lg:w-[380px] flex-shrink-0 space-y-4">
             {/* ATM Option Card (Strike, Call/Put, Quote & ATR Brackets) */}
-            <AtmOptionCard status={status} />
+            <AtmOptionCard status={status} onRefresh={loadData} />
 
             {/* Option Buying Configuration (BTC/ETH/XAUT, Supertrend, EMA, ATR) */}
             <OptionConfigCard status={status} onRefresh={loadData} />

@@ -1,16 +1,43 @@
-import React from 'react';
-import { Target, Shield, ArrowUpRight, ArrowDownRight, Zap } from 'lucide-react';
+import React, { useState } from 'react';
+import { Target, Shield, ArrowUpRight, ArrowDownRight, Zap, CheckCircle2, ShoppingCart } from 'lucide-react';
 import { BotStatus } from '../types';
+import { buyOption } from '../api';
 
 interface AtmOptionCardProps {
   status: BotStatus | null;
+  onRefresh?: () => void;
 }
 
-export const AtmOptionCard: React.FC<AtmOptionCardProps> = ({ status }) => {
+export const AtmOptionCard: React.FC<AtmOptionCardProps> = ({ status, onRefresh }) => {
+  const [executing, setExecuting] = useState<string | null>(null);
+  const [orderNotice, setOrderNotice] = useState<string | null>(null);
+
   const atm = status?.atm_option;
   const isCall = atm?.option_type === 'CALL';
   const signal = status?.latest_signal;
   const indicators = status?.indicators;
+  const contractsCount = status?.option_config?.contracts || 1;
+
+  const handleQuickBuy = async (action: 'BUY_CALL' | 'BUY_PUT') => {
+    try {
+      setExecuting(action);
+      setOrderNotice(null);
+      const res = await buyOption({
+        action,
+        symbol: atm?.symbol,
+        product_id: atm?.product_id,
+        contracts: contractsCount,
+        with_protection: true,
+      });
+      setOrderNotice(`Filled: ${res.symbol} (${res.client_order_id?.slice(0, 15)}...)`);
+      if (onRefresh) onRefresh();
+      setTimeout(() => setOrderNotice(null), 5000);
+    } catch (err: any) {
+      alert(`Order Failed: ${err.message}`);
+    } finally {
+      setExecuting(null);
+    }
+  };
 
   if (!atm) {
     return (
@@ -100,6 +127,51 @@ export const AtmOptionCard: React.FC<AtmOptionCardProps> = ({ status }) => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Instant 1-Click Trading Buttons */}
+      <div className="space-y-2 pt-1 border-t border-violet-500/15">
+        <div className="flex items-center justify-between text-[10px] font-mono uppercase text-slate-400">
+          <span>Instant 1-Click Execution</span>
+          <span className="text-violet-400 font-semibold">{contractsCount} Contract{contractsCount > 1 ? 's' : ''}</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => handleQuickBuy('BUY_CALL')}
+            disabled={executing !== null}
+            className={`flex items-center justify-center space-x-1.5 py-2 px-3 rounded-lg font-mono font-bold text-xs transition-all ${
+              executing === 'BUY_CALL'
+                ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-500/50 animate-pulse'
+                : 'bg-emerald-600/25 hover:bg-emerald-600/35 text-emerald-200 border border-emerald-500/40 pro-glow-emerald active:scale-95'
+            }`}
+            title="Immediately buy ATM Call on Delta Testnet"
+          >
+            <ShoppingCart className="w-3.5 h-3.5 text-emerald-400" />
+            <span>{executing === 'BUY_CALL' ? 'Sending...' : '⚡ BUY ATM CALL'}</span>
+          </button>
+
+          <button
+            onClick={() => handleQuickBuy('BUY_PUT')}
+            disabled={executing !== null}
+            className={`flex items-center justify-center space-x-1.5 py-2 px-3 rounded-lg font-mono font-bold text-xs transition-all ${
+              executing === 'BUY_PUT'
+                ? 'bg-rose-900/40 text-rose-300 border border-rose-500/50 animate-pulse'
+                : 'bg-rose-600/25 hover:bg-rose-600/35 text-rose-200 border border-rose-500/40 pro-glow-red active:scale-95'
+            }`}
+            title="Immediately buy ATM Put on Delta Testnet"
+          >
+            <ShoppingCart className="w-3.5 h-3.5 text-rose-400" />
+            <span>{executing === 'BUY_PUT' ? 'Sending...' : '⚡ BUY ATM PUT'}</span>
+          </button>
+        </div>
+
+        {orderNotice && (
+          <div className="p-2 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center space-x-2 text-xs font-mono text-emerald-300 animate-fadeIn">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+            <span className="truncate">{orderNotice}</span>
+          </div>
+        )}
       </div>
 
       {/* Underlying Signal Confirmation */}

@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+node_modules/
+dashboard/node_modules/
+.git/
+.gitignore
+trading_bot.db
+trading_bot.db-journal
+.env
+.freebuff/

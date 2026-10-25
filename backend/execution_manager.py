@@ -123,6 +123,102 @@ class ExecutionManager:
                 ))
             return False, f"AMBIGUOUS_SUBMISSION: {str(exc)}", client_id
 
+    async def execute_manual_option(
+        self,
+        action: str,
+        product_id: int,
+        symbol: str,
+        size: float,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None
+    ) -> Tuple[bool, str, Optional[str]]:
+        """Direct one-click manual execution of an option contract (Call or Put)."""
+        if not self.client.has_credentials():
+            return False, "Delta Exchange credentials not configured. Please enter your Testnet API Key & Secret.", None
+
+        if size <= 0:
+            return False, f"Invalid contract size {size}. Must be positive.", None
+
+        client_id = self.generate_client_order_id(prefix="man")
+        side = OrderSide.BUY.value
+
+        async with get_db_session() as session:
+            order_record = OrderRecord(
+                client_order_id=client_id,
+                product_id=product_id,
+                symbol=symbol,
+                side=side,
+                order_type="market_order",
+                size=size,
+                status=OrderStatus.PENDING.value
+            )
+            session.add(order_record)
+            session.add(EventLog(
+                event_type="MANUAL_ORDER_INTENT",
+                component="ExecutionManager",
+                message=f"Manual one-click order: BUY {size} of {symbol} ({action})",
+                details=f"client_order_id={client_id}"
+            ))
+
+        try:
+            exchange_res = await self.client.create_order(
+                product_id=product_id,
+                size=size,
+                side=side,
+                order_type="market_order",
+                client_order_id=client_id
+            )
+
+            exchange_order_id = str(exchange_res.get("id") or "")
+            order_state = exchange_res.get("state", "open")
+            filled_size = float(exchange_res.get("size", size))
+
+            async with get_db_session() as session:
+                order_record.exchange_order_id = exchange_order_id
+                order_record.status = OrderStatus.FILLED.value if order_state in ("closed", "filled") else OrderStatus.OPEN.value
+                order_record.filled_size = filled_size
+                session.add(EventLog(
+                    event_type="MANUAL_ORDER_FILLED",
+                    component="ExecutionManager",
+                    message=f"Manual {action} executed on Delta Testnet. Status: {order_state}",
+                    details=f"client_id={client_id}, exchange_id={exchange_order_id}, symbol={symbol}"
+                ))
+
+            if stop_loss_price and stop_loss_price > 0:
+                await self._place_protective_exit(
+                    product_id=product_id,
+                    symbol=symbol,
+                    entry_side=side,
+                    size=size,
+                    stop_price=stop_loss_price
+                )
+
+            return True, f"Manual {action} order filled for {size} {symbol}.", client_id
+
+        except DeltaExchangeError as exc:
+            logger.error(f"Exchange error placing manual order {client_id}: {exc}")
+            async with get_db_session() as session:
+                order_record.status = OrderStatus.REJECTED.value
+                session.add(EventLog(
+                    event_type="MANUAL_ORDER_REJECTED",
+                    component="ExecutionManager",
+                    message=f"Manual order rejected: {str(exc)}",
+                    details=f"client_id={client_id}"
+                ))
+            return False, f"Exchange error: {str(exc)}", client_id
+
+        except Exception as exc:
+            logger.critical(f"Network error executing manual order {client_id}: {exc}")
+            async with get_db_session() as session:
+                order_record.status = OrderStatus.UNKNOWN.value
+                session.add(EventLog(
+                    event_type="MANUAL_ORDER_ERROR",
+                    component="ExecutionManager",
+                    message=f"Network error: {str(exc)}",
+                    details=f"client_id={client_id}"
+                ))
+            return False, f"Error submitting order: {str(exc)}", client_id
+
     async def _place_protective_exit(
         self,
         product_id: int,

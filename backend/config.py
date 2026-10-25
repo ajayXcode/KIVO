@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     SCAN_INTERVAL_SECONDS: int = Field(default=5)
 
     # Runtime & Safety
-    HOST: str = Field(default="127.0.0.1")
+    HOST: str = Field(default="0.0.0.0")
     PORT: int = Field(default=8000)
     DATABASE_URL: str = Field(default="sqlite+aiosqlite:///trading_bot.db")
     LOG_LEVEL: str = Field(default="INFO")

@@ -68,15 +68,29 @@ class BotService:
         self.latest_price: float = 0.0
         self.active_orders_count: int = 0
         self.cached_watchlist: Dict[str, WatchlistItem] = {}
+        self.cached_profile: Optional[Dict[str, Any]] = None
+        self.cached_balances: List[Dict[str, Any]] = []
+        self.live_wallet_usd: float = 0.0
+        self.user_email: Optional[str] = None
+        self.user_account_id: Optional[str] = None
 
     def set_credentials(self, api_key: str, api_secret: str) -> None:
         """Dynamically update API credentials from frontend UI."""
         self.client.set_credentials(api_key, api_secret)
         logger.info(f"API credentials updated via frontend. Key: {mask_credential(api_key)}")
+        try:
+            asyncio.create_task(self.fetch_profile_and_balances())
+        except Exception:
+            pass
 
     def clear_credentials(self) -> None:
         """Clear active session credentials."""
         self.client.clear_credentials()
+        self.cached_profile = None
+        self.cached_balances = []
+        self.live_wallet_usd = 0.0
+        self.user_email = None
+        self.user_account_id = None
         logger.info("API credentials cleared from session.")
 
     def get_credentials_status(self) -> CredentialsStatus:
@@ -309,6 +323,130 @@ class BotService:
             symbol=target_sym
         )
 
+    async def fetch_profile_and_balances(self) -> Dict[str, Any]:
+        """Fetch live account profile and asset balances from Delta Exchange Testnet."""
+        if not self.client.has_credentials():
+            return {
+                "configured": False,
+                "email": None,
+                "account_id": None,
+                "profile": None,
+                "balances": [],
+                "total_balance_usd": 0.0
+            }
+
+        try:
+            profile = await self.client.get_profile()
+            balances = await self.client.get_wallet_balances()
+            self.cached_profile = profile
+            self.cached_balances = balances
+
+            # Extract user metadata
+            self.user_email = profile.get("email") or profile.get("user_name")
+            self.user_account_id = str(profile.get("id") or "")
+
+            # Calculate total USD balance from USDT/USD assets
+            total_usd = 0.0
+            for b in balances:
+                sym = str(b.get("asset_symbol", "")).upper()
+                bal = float(b.get("balance") or b.get("available_balance") or 0.0)
+                if sym in ("USDT", "USD", "USDC"):
+                    total_usd += bal
+            self.live_wallet_usd = round(total_usd, 2)
+
+            return {
+                "configured": True,
+                "email": self.user_email,
+                "account_id": self.user_account_id,
+                "country": profile.get("country"),
+                "is_kyc_approved": bool(profile.get("is_kyc_approved", False)),
+                "profile": profile,
+                "balances": balances,
+                "total_balance_usd": self.live_wallet_usd
+            }
+        except Exception as exc:
+            logger.debug(f"Unable to fetch profile/balances: {exc}")
+            return {
+                "configured": True,
+                "email": self.user_email,
+                "account_id": self.user_account_id,
+                "profile": self.cached_profile,
+                "balances": self.cached_balances,
+                "total_balance_usd": self.live_wallet_usd
+            }
+
+    async def execute_manual_option_buy(
+        self,
+        action: str = "BUY_CALL",
+        symbol: Optional[str] = None,
+        product_id: Optional[int] = None,
+        contracts: Optional[int] = None,
+        with_protection: bool = True
+    ) -> Dict[str, Any]:
+        """One-click manual purchase of active ATM option with automated protective brackets."""
+        action = action.upper().strip()
+        size = float(contracts or self.settings.CONTRACTS_COUNT)
+
+        target_product_id = product_id
+        target_symbol = symbol
+
+        # If symbol/product not supplied, resolve via active ATM option or discovery
+        if not target_product_id or not target_symbol:
+            if self.current_atm_option and (
+                (action == "BUY_CALL" and self.current_atm_option.option_type == "CALL") or
+                (action == "BUY_PUT" and self.current_atm_option.option_type == "PUT")
+            ):
+                target_product_id = self.current_atm_option.product_id
+                target_symbol = self.current_atm_option.symbol
+            else:
+                spot = self.latest_price if self.latest_price > 0 else 68000.0
+                disc = await self.client.find_atm_option(self.settings.UNDERLYING_ASSET, action, spot)
+                if disc:
+                    target_product_id = int(disc.get("id", 0))
+                    target_symbol = disc.get("symbol", "")
+
+        if not target_product_id or not target_symbol:
+            return {
+                "success": False,
+                "message": f"Could not identify active ATM option for {action} on {self.settings.UNDERLYING_ASSET}.",
+                "client_order_id": None
+            }
+
+        # Calculate Stop-Loss ATR bracket
+        sl_price = None
+        tp_price = None
+        if with_protection and self.current_atm_option:
+            sl_price = self.current_atm_option.stop_loss_price
+            tp_price = self.current_atm_option.take_profit_price
+
+        success, msg, client_id = await self.execution.execute_manual_option(
+            action=action,
+            product_id=target_product_id,
+            symbol=target_symbol,
+            size=size,
+            stop_loss_price=sl_price,
+            take_profit_price=tp_price
+        )
+
+        if success:
+            # Reconcile position immediately
+            _, self.current_position_size, self.unrealized_pnl = await self.reconciler.reconcile(
+                target_product_id,
+                target_symbol
+            )
+            # Update balances in background
+            asyncio.create_task(self.fetch_profile_and_balances())
+
+        return {
+            "success": success,
+            "message": msg,
+            "client_order_id": client_id,
+            "symbol": target_symbol,
+            "product_id": target_product_id,
+            "action": action,
+            "size": size
+        }
+
     async def initialize(self) -> bool:
         logger.info("Initializing EdgePilot Option Buying Bot...")
         self.state_machine.transition(BotState.INITIALIZING, "Running startup gates")
@@ -456,6 +594,7 @@ class BotService:
                         target_prod_id,
                         target_sym
                     )
+                    await self.fetch_profile_and_balances()
 
             except Exception as exc:
                 logger.error(f"Main loop error: {exc}")
@@ -476,6 +615,22 @@ class BotService:
             sl_atr_multiplier=self.settings.SL_ATR_MULT,
             tp_atr_multiplier=self.settings.TP_ATR_MULT
         )
+
+        # Human-readable real-time auto-pilot explanation
+        if self.risk_manager.circuit_breaker_active:
+            auto_detail = "🚨 Daily Loss Circuit Breaker Active. Trading halted."
+        elif self.state_machine.current_state == BotState.PAUSED:
+            auto_detail = "⏸️ Operator Paused: Auto-Pilot waiting for resume."
+        elif self.state_machine.current_state == BotState.HALTED:
+            auto_detail = "🛑 Emergency Halt Active. All orders cancelled."
+        elif self.automation_mode == AutomationMode.MANUAL:
+            auto_detail = f"🖐️ Manual Standby Mode. Monitoring {self.settings.UNDERLYING_ASSET}. Use Instant Buy buttons or toggle Auto-Pilot ON."
+        elif self.state_machine.current_state == BotState.RUNNING and self.automation_mode == AutomationMode.AUTO_PILOT:
+            st_text = self.latest_signal.indicators.supertrend_label if self.latest_signal and self.latest_signal.indicators else "NEUTRAL"
+            opt_sym = self.current_atm_option.symbol if self.current_atm_option else "Scanning"
+            auto_detail = f"🤖 Auto-Pilot ACTIVE: Monitoring {self.settings.SYMBOL} (Spot: ${self.latest_price:,.1f} | ST: {st_text} | ATM: {opt_sym}). Orders execute on signal."
+        else:
+            auto_detail = f"⚙️ Bot State: {self.state_machine.current_state.value}. Standby."
 
         return BotStatusResponse(
             state=self.state_machine.current_state,
@@ -501,7 +656,10 @@ class BotService:
             reconciliation_healthy=self.reconciler.is_healthy,
             credentials_configured=self.client.has_credentials(),
             masked_api_key=mask_credential(self.client.api_key),
-            last_reconciliation_time=self.reconciler.last_reconciliation_time
+            last_reconciliation_time=self.reconciler.last_reconciliation_time,
+            live_balance_usd=self.live_wallet_usd,
+            user_email=self.user_email,
+            auto_pilot_status_detail=auto_detail
         )
 
 

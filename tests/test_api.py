@@ -21,6 +21,11 @@ def test_api_routes_registered():
     assert "/api/control/kill" in routes
     assert "/api/control/close-position" in routes
     assert "/api/control/reconcile" in routes
+    assert "/api/profile" in routes
+    assert "/api/control/buy-option" in routes
+    assert "/api/control/clear-session" in routes
+    assert "/api/control/option-config" in routes
+    assert "/api/control/switch-asset" in routes
 
 
 def test_api_metadata():

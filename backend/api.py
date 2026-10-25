@@ -25,9 +25,12 @@ from backend.models import (
     OptionConfigPayload,
     OrderRecord,
     PositionRecord,
+    QuickOrderPayload,
+    QuickOrderResponse,
     SessionResetResponse,
     SignalRecord,
     SymbolSwitchPayload,
+    UserProfileResponse,
     WatchlistItem,
 )
 
@@ -133,6 +136,27 @@ async def clear_credentials() -> Dict[str, Any]:
     service = get_bot_service()
     service.clear_credentials()
     return {"success": True, "message": "Credentials cleared from active session."}
+
+
+# ==============================================================================
+# Delta Profile & Live Wallet Balances
+# ==============================================================================
+
+@app.get("/api/profile", response_model=UserProfileResponse)
+async def get_profile() -> UserProfileResponse:
+    """Fetch user profile, account id, and wallet balances directly from Delta Exchange."""
+    service = get_bot_service()
+    data = await service.fetch_profile_and_balances()
+    return UserProfileResponse(
+        configured=data.get("configured", False),
+        email=data.get("email"),
+        account_id=data.get("account_id"),
+        country=data.get("country"),
+        is_kyc_approved=data.get("is_kyc_approved", False),
+        profile=data.get("profile"),
+        balances=data.get("balances", []),
+        total_balance_usd=data.get("total_balance_usd", 0.0)
+    )
 
 
 # ==============================================================================
@@ -388,6 +412,33 @@ async def control_reconcile() -> Dict[str, Any]:
         "reconciled_position_size": size,
         "unrealized_pnl": upnl
     }
+
+
+@app.post("/api/control/buy-option", response_model=QuickOrderResponse)
+async def control_buy_option(payload: QuickOrderPayload) -> QuickOrderResponse:
+    """Instant one-click manual execution of an ATM Call or Put option."""
+    service = get_bot_service()
+    res = await service.execute_manual_option_buy(
+        action=payload.action,
+        symbol=payload.symbol,
+        product_id=payload.product_id,
+        contracts=payload.contracts,
+        with_protection=payload.with_protection
+    )
+    if not res.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=res.get("message", "Order execution failed.")
+        )
+    return QuickOrderResponse(
+        success=True,
+        message=res.get("message", ""),
+        client_order_id=res.get("client_order_id"),
+        symbol=res.get("symbol"),
+        product_id=res.get("product_id"),
+        action=res.get("action", payload.action),
+        size=res.get("size", 1.0)
+    )
 
 
 

@@ -19,3 +19,18 @@ def test_strategy_warmup_gate():
     assert result.action == SignalAction.NO_TRADE
     assert "INDICATOR_WARMUP" in result.reason
 
+
+def test_strategy_chop_guard():
+    engine = StrategyEngine()
+    series_5m = CandleSeries(resolution_seconds=300)
+    series_15m = CandleSeries(resolution_seconds=900)
+
+    now = int(time.time())
+    # 40 perfectly flat candles -> ADX and BB bandwidth will be zero
+    for i in range(40):
+        series_5m.add_candle(Candle(now + i * 300, 100.0, 100.05, 99.95, 100.0, 1.0))
+        series_15m.add_candle(Candle(now + i * 900, 100.0, 100.05, 99.95, 100.0, 1.0))
+
+    result = engine.evaluate(series_5m, series_15m)
+    assert result.action == SignalAction.NO_TRADE
+    assert result.indicators.setup_type in ("CHOP_FILTER", "WAITING")

@@ -250,3 +250,31 @@ def calculate_supertrend(
     return supertrend, direction, final_upper, final_lower
 
 
+def calculate_ewo(prices: np.ndarray, fast_period: int = 5, slow_period: int = 35) -> np.ndarray:
+    """
+    Calculate Elliott Wave Oscillator (EWO) = EMA(fast) - EMA(slow).
+    Used extensively in Freqtrade BB_RPB_TSL for momentum divergence detection.
+    """
+    if len(prices) < slow_period:
+        return np.full_like(prices, 0.0, dtype=float)
+    fast_ema = calculate_ema(prices, fast_period)
+    slow_ema = calculate_ema(prices, slow_period)
+    return np.where(np.isnan(fast_ema) | np.isnan(slow_ema), 0.0, fast_ema - slow_ema)
+
+
+def calculate_roc(prices: np.ndarray, period: int = 12) -> np.ndarray:
+    """
+    Calculate Rate of Change (ROC) percentage momentum.
+    ROC = (Price_t - Price_{t-n}) / Price_{t-n} * 100.
+    """
+    n = len(prices)
+    roc = np.full(n, 0.0, dtype=float)
+    if n <= period:
+        return roc
+    for i in range(period, n):
+        denom = prices[i - period]
+        if denom > 0:
+            roc[i] = ((prices[i] - denom) / denom) * 100.0
+    return roc
+
+
