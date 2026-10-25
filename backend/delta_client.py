@@ -42,7 +42,7 @@ class DeltaClient:
         self.settings.DELTA_API_KEY = self.api_key
         self.settings.DELTA_API_SECRET = self.api_secret
 
-        if persist and self.api_key and self.api_secret:
+        if persist and self.api_key and self.api_secret and os.environ.get("TESTING") != "1":
             try:
                 from pathlib import Path
                 import re
@@ -64,23 +64,24 @@ class DeltaClient:
             except Exception as e:
                 logger.warning(f"Notice: Could not write credentials to .env: {e}")
 
-    def clear_credentials(self) -> None:
-        """Clear active session credentials and wipe from .env."""
+    def clear_credentials(self, persist: bool = False) -> None:
+        """Clear active session credentials."""
         self.api_key = ""
         self.api_secret = ""
         self.settings.DELTA_API_KEY = ""
         self.settings.DELTA_API_SECRET = ""
-        try:
-            from pathlib import Path
-            import re
-            env_path = Path(__file__).resolve().parent.parent / ".env"
-            if env_path.exists():
-                content = env_path.read_text(encoding="utf-8")
-                content = re.sub(r"^DELTA_API_KEY=.*$", "DELTA_API_KEY=", content, flags=re.MULTILINE)
-                content = re.sub(r"^DELTA_API_SECRET=.*$", "DELTA_API_SECRET=", content, flags=re.MULTILINE)
-                env_path.write_text(content.strip() + "\n", encoding="utf-8")
-        except Exception:
-            pass
+        if persist and os.environ.get("TESTING") != "1":
+            try:
+                from pathlib import Path
+                import re
+                env_path = Path(__file__).resolve().parent.parent / ".env"
+                if env_path.exists():
+                    content = env_path.read_text(encoding="utf-8")
+                    content = re.sub(r"^DELTA_API_KEY=.*$", "DELTA_API_KEY=", content, flags=re.MULTILINE)
+                    content = re.sub(r"^DELTA_API_SECRET=.*$", "DELTA_API_SECRET=", content, flags=re.MULTILINE)
+                    env_path.write_text(content.strip() + "\n", encoding="utf-8")
+            except Exception:
+                pass
 
     def has_credentials(self) -> bool:
         return bool(self.api_key and self.api_secret)

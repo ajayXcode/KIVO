@@ -478,6 +478,7 @@ class BotService:
         )
         self.current_position_size = pos_size
         self.unrealized_pnl = u_pnl
+        await self.fetch_profile_and_balances()
         await self.sync_market_data()
         self.state_machine.transition(BotState.READY, "Startup gates passed. Ready.")
         return True
