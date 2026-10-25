@@ -10,7 +10,7 @@
 FROM node:20-alpine AS frontend-builder
 WORKDIR /app/dashboard
 
-COPY dashboard/package.json ./
+COPY dashboard/package*.json ./
 RUN npm install
 
 COPY dashboard/ ./
@@ -35,6 +35,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
 # Install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Create volume directory for persistent data
+RUN mkdir -p /app/data
 
 # Copy backend application and MCP server
 COPY backend/ ./backend/

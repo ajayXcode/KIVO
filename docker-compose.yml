@@ -13,6 +13,7 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - ENVIRONMENT=TESTNET
+      - DATABASE_URL=sqlite+aiosqlite:///data/trading_bot.db
       - DELTA_REST_URL=https://cdn-ind.testnet.deltaex.org
       - DELTA_WS_URL=wss://socket-ind.testnet.deltaex.org
       - UNDERLYING_ASSET=BTC
